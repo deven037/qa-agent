@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "lib": ["es2019", "dom"],
+    "strict": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["node", "@playwright/test"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}

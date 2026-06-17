@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# QA Agent config (contains tokens)
+/config/
+
+# Playwright output
+/playwright-report/
+.claude/
