@@ -2,6 +2,7 @@ import type { NextAuthConfig } from 'next-auth'
 
 // Edge-compatible auth config — no Node.js modules, no Mongoose
 export const authConfig: NextAuthConfig = {
+  trustHost: true,
   session: { strategy: 'jwt' },
   pages: { signIn: '/login' },
   callbacks: {
