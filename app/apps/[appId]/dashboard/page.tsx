@@ -31,7 +31,7 @@ export default async function DashboardPage({ params }: { params: Promise<{ appI
   if (!session) redirect('/login')
 
   const { appId } = await params
-  const app = readApps().find((a) => a.id === appId)!
+  const app = (await readApps()).find((a) => a.id === appId)!
   const knowledgeStatus = await getKnowledgeStatus(appId).catch(() => null)
 
   // Fetch counts per type for the work item chart

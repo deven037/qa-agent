@@ -1,4 +1,4 @@
-import { chromium, Browser, Page, Locator, FrameLocator } from 'playwright'
+import { chromium, firefox, webkit, Browser, Page, Locator, FrameLocator } from 'playwright'
 import { AppConfig } from '@/lib/config/store'
 import { PageKnowledge } from '@/lib/db/models/AppKnowledge'
 import { TestCase } from '@/lib/agents/testcase-agent'
@@ -678,11 +678,12 @@ export async function playwrightMcpAgent(
   onEvent: (e: AgentEvent) => void,
   options: { browser?: string; instructions?: string; headed?: boolean } = {},
 ): Promise<ExecutionResult> {
-  const { headed = false } = options
+  const { headed = false, browser: browserType = 'chromium' } = options
   const baseUrl = appConfig.baseUrl.replace(/\/$/, '')
 
   const tcResults: ExecutionResult['testResults'] = []
-  const browser: Browser = await chromium.launch({ headless: !headed })
+  const pw = browserType === 'firefox' ? firefox : browserType === 'webkit' ? webkit : chromium
+  const browser: Browser = await pw.launch({ headless: !headed })
 
   try {
     for (const tc of testCases) {

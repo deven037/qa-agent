@@ -6,7 +6,7 @@ import { nanoid } from 'nanoid'
 export async function GET() {
   const session = await auth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return NextResponse.json(readApps())
+  return NextResponse.json(await readApps())
 }
 
 export async function POST(req: NextRequest) {
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     playwrightTestsDir: `playwright-tests/${body.name.toLowerCase().replace(/\s+/g, '-')}`,
     createdAt: new Date().toISOString(),
   }
-  const apps = readApps()
-  writeApps([...apps, newApp])
+  const apps = await readApps()
+  await writeApps([...apps, newApp])
   return NextResponse.json(newApp)
 }

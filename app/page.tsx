@@ -5,6 +5,6 @@ import { isConfigured } from '@/lib/config/store'
 export default async function RootPage() {
   const session = await auth()
   if (!session) redirect('/login')
-  if (!isConfigured()) redirect('/setup')
+  if (!(await isConfigured())) redirect('/setup')
   redirect('/dashboard')
 }

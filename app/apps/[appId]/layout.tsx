@@ -15,7 +15,7 @@ export default async function AppLayout({
   if (!session) redirect('/login')
 
   const { appId } = await params
-  const app = readApps().find((a) => a.id === appId)
+  const app = (await readApps()).find((a) => a.id === appId)
   if (!app) notFound()
 
   return (
