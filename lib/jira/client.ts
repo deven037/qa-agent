@@ -1,6 +1,11 @@
 export interface JiraIssue {
   key: string
   summary: string
+  issueType: string
+  status: string
+  priority: string
+  reporter: string
+  created: string
   description: string
   acceptanceCriteria: string
   comments: JiraComment[]
@@ -85,6 +90,11 @@ export async function fetchJiraIssue(issueKey: string): Promise<JiraIssue> {
   return {
     key: issueKey,
     summary: data.fields.summary ?? '',
+    issueType: data.fields.issuetype?.name ?? '',
+    status: data.fields.status?.name ?? '',
+    priority: data.fields.priority?.name ?? '',
+    reporter: data.fields.reporter?.displayName ?? '',
+    created: data.fields.created ?? '',
     description,
     acceptanceCriteria,
     comments,
@@ -151,6 +161,7 @@ export interface JiraIssueFields {
   summary: string
   description: string
   issueType: string
+  parentKey?: string
   acceptanceCriteria?: string
   stepsToReproduce?: string
   expectedResult?: string
@@ -179,6 +190,7 @@ export async function createJiraIssue(projectKey: string, fields: JiraIssueField
       summary: fields.summary,
       description: buildAdf(fields.description),
       issuetype: { name: ISSUE_TYPE_MAP[fields.issueType] ?? fields.issueType },
+      ...(fields.parentKey ? { parent: { key: fields.parentKey } } : {}),
     },
   }
 
