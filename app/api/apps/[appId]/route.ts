@@ -11,6 +11,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ app
   return NextResponse.json(app)
 }
 
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ appId: string }> }) {
+  const session = await auth()
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { appId } = await params
+  const body = await req.json()
+  const apps = readApps()
+  const idx = apps.findIndex((a) => a.id === appId)
+  if (idx === -1) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  apps[idx] = { ...apps[idx], ...body }
+  writeApps(apps)
+  return NextResponse.json(apps[idx])
+}
+
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ appId: string }> }) {
   const session = await auth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -11,6 +11,12 @@ declare global {
   var _mongooseConn: Promise<typeof mongoose> | undefined
 }
 
-const cached = global._mongooseConn ?? (global._mongooseConn = mongoose.connect(MONGODB_URI))
+const cached = global._mongooseConn ?? (global._mongooseConn = mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 8000,
+  connectTimeoutMS: 8000,
+  socketTimeoutMS: 10000,
+  tls: true,
+  tlsAllowInvalidCertificates: process.env.NODE_ENV !== 'production',
+}))
 
 export default cached

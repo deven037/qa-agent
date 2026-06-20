@@ -51,6 +51,11 @@ export default function LoginPage() {
             <Button type="submit" className="w-full bg-violet-600 hover:bg-violet-700" disabled={loading}>
               {loading ? 'Signing in...' : 'Sign in'}
             </Button>
+            <div className="text-right">
+              <Link href="/reset-password" className="text-sm text-violet-600 hover:underline">
+                Forgot password?
+              </Link>
+            </div>
           </form>
           <p className="mt-4 text-center text-sm text-slate-500">
             No account?{' '}
