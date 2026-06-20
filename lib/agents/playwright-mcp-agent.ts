@@ -685,7 +685,14 @@ export async function playwrightMcpAgent(
   const pw = browserType === 'firefox' ? firefox : browserType === 'webkit' ? webkit : chromium
   const browser: Browser = await pw.launch({
     headless: !headed,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process',
+    ],
   })
 
   try {
