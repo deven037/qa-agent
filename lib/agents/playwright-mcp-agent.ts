@@ -145,11 +145,66 @@ function findBestLocatorByName(target: string, pages: PageKnowledge[]): string |
   return (best as { locator: string; score: number } | null)?.locator ?? null
 }
 
+// ─── Locator index — built once per execution, replaces per-step O(n) scans ──
+
+interface LocatorIndex {
+  primary: Map<string, string>  // target.toLowerCase() → best locator
+  byName: Map<string, string>   // target.toLowerCase() → byName locator
+}
+
+function buildLocatorIndex(pages: PageKnowledge[]): LocatorIndex {
+  const primary = new Map<string, string>()
+  const byName = new Map<string, string>()
+  for (const pg of pages) {
+    for (const form of pg.forms) {
+      for (const field of form.fields) {
+        const key = (field.label || field.placeholder || field.htmlName || '').toLowerCase().trim()
+        if (!key) continue
+        if (!primary.has(key)) {
+          const loc = field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole || field.locators.byName
+          if (loc) primary.set(key, loc)
+        }
+        if (!byName.has(key) && field.locators.byName) byName.set(key, field.locators.byName)
+      }
+      if (form.submitButtonLocator) {
+        const m = form.submitButtonLocator.match(/name:\s*['"](.+?)['"]/)
+        if (m && !primary.has(m[1].toLowerCase())) primary.set(m[1].toLowerCase(), form.submitButtonLocator)
+      }
+    }
+    for (const btn of pg.buttons) {
+      const key = (btn.name || btn.label || '').toLowerCase().trim()
+      if (!key || primary.has(key)) continue
+      const loc = btn.locators.getByRole || btn.locators.getByText || btn.locators.getByLabel
+      if (loc) primary.set(key, loc)
+    }
+  }
+  return { primary, byName }
+}
+
+function indexedLocator(target: string, index: LocatorIndex): string | null {
+  const tl = target.toLowerCase().trim()
+  // Exact match first, then prefix/substring
+  if (index.primary.has(tl)) return index.primary.get(tl)!
+  for (const [key, loc] of index.primary) {
+    if (key.startsWith(tl) || tl.startsWith(key)) return loc
+  }
+  return null
+}
+
+function indexedLocatorByName(target: string, index: LocatorIndex): string | null {
+  const tl = target.toLowerCase().trim()
+  if (index.byName.has(tl)) return index.byName.get(tl)!
+  for (const [key, loc] of index.byName) {
+    if (key.startsWith(tl) || tl.startsWith(key)) return loc
+  }
+  return null
+}
+
 // ─── Page stability ───────────────────────────────────────────────────────────
 
 async function waitForStable(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded').catch(() => {})
-  await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {})
+  await page.waitForLoadState('networkidle', { timeout: 800 }).catch(() => {})
 }
 
 // ─── Overlay dismissal ────────────────────────────────────────────────────────
@@ -166,14 +221,17 @@ async function dismissOverlays(page: Page): Promise<void> {
     'button:has-text("Got it")',
     'button:has-text("Dismiss")',
   ]
-  for (const sel of selectors) {
-    try {
+  // Check all selectors concurrently — cuts worst-case 3.6s serial loop to ~300ms
+  const results = await Promise.allSettled(
+    selectors.map(async (sel) => {
       const el = page.locator(sel).first()
-      if (await el.isVisible({ timeout: 400 })) {
-        await el.click({ timeout: 1000 })
-      }
-    } catch { /* overlay may not exist */ }
-  }
+      const visible = await el.isVisible({ timeout: 300 }).catch(() => false)
+      if (visible) await el.click({ timeout: 800 }).catch(() => {})
+      return visible
+    })
+  )
+  const dismissed = results.some(r => r.status === 'fulfilled' && r.value)
+  if (dismissed) await waitForStable(page)
 }
 
 // ─── ARIA snapshot ────────────────────────────────────────────────────────────
@@ -249,16 +307,14 @@ async function tryFill(locator: Locator, value: string): Promise<boolean> {
 async function tryClick(locator: Locator): Promise<boolean> {
   try {
     const first = locator.first()
-    await first.waitFor({ state: 'visible', timeout: 3000 })
+    await first.waitFor({ state: 'visible', timeout: 1500 })
     await first.scrollIntoViewIfNeeded()
-    // Hover first — some elements only become clickable on hover
-    await first.hover({ timeout: 1000 }).catch(() => {})
-    await first.click({ timeout: 5000 })
+    await first.click({ timeout: 3000 })
     return true
   } catch {
     // Force-click bypasses pointer-events:none / overlay coverage
     try {
-      await locator.first().click({ force: true, timeout: 3000 })
+      await locator.first().click({ force: true, timeout: 2000 })
       return true
     } catch { return false }
   }
@@ -507,7 +563,7 @@ async function analyzeStuckScenario(
 
 // ─── Action executor ──────────────────────────────────────────────────────────
 
-async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledge[], baseUrl: string): Promise<void> {
+async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledge[], baseUrl: string, locIndex?: LocatorIndex): Promise<void> {
   const { action, target, value } = parsed
   const resolvedLocator = parsed.locator && parsed.locator.length > 0 ? parsed.locator : null
 
@@ -534,10 +590,10 @@ async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledg
       // 1. LLM-resolved locator — grounded in live ARIA + raw DOM fields (primary)
       if (resolvedLocator && await tryFill(resolveLocatorString(page, resolvedLocator), fillVal)) break
       // 2. KB byName CSS selector — input[name="..."] is immune to ARIA bugs (reliable fallback)
-      const kbByName = findBestLocatorByName(target, pages)
+      const kbByName = locIndex ? indexedLocatorByName(target, locIndex) : findBestLocatorByName(target, pages)
       if (kbByName && await tryFill(resolveLocatorString(page, kbByName), fillVal)) break
       // 3. KB primary locator (getByLabel/getByRole) — for sites with clean ARIA
-      const kbLocatorFill = findBestLocator(target, pages)
+      const kbLocatorFill = locIndex ? indexedLocator(target, locIndex) : findBestLocator(target, pages)
       if (kbLocatorFill && await tryFill(resolveLocatorString(page, kbLocatorFill), fillVal)) break
 
       throw new Error(`Could not fill "${target}". LLM locator: ${resolvedLocator || '(none)'}. URL: ${page.url()}`)
@@ -549,7 +605,7 @@ async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledg
       // 1. LLM-resolved locator — grounded in live ARIA (primary)
       if (resolvedLocator && await tryClick(resolveLocatorString(page, resolvedLocator))) break
       // 2. KB locator
-      const kbLocatorClick = findBestLocator(target, pages)
+      const kbLocatorClick = locIndex ? indexedLocator(target, locIndex) : findBestLocator(target, pages)
       if (kbLocatorClick && await tryClick(resolveLocatorString(page, kbLocatorClick))) break
       // 3. button
       if (await tryClick(page.getByRole('button', { name: target, exact: false }))) break
@@ -650,6 +706,8 @@ export async function playwrightMcpAgent(
       const completedSteps: { step: string; status: string }[] = []
       // Cache resolved steps so analyst revisions can override them
       const parsedStepsCache: (ParsedStep | null)[] = new Array(tc.steps.length).fill(null)
+      // Build locator index once per TC — avoids O(pages×forms×fields) per-step scans
+      const locatorIndex = buildLocatorIndex(pages)
 
       try {
         for (let i = 0; i < tc.steps.length; i++) {
@@ -679,12 +737,12 @@ export async function playwrightMcpAgent(
 
           let stepError: Error | null = null
           let healingAttempts = 0
-          let usedLocator = parsed.locator || findBestLocator(parsed.target, pages) || undefined
+          let usedLocator = parsed.locator || indexedLocator(parsed.target, locatorIndex) || undefined
 
           // Up to 3 attempts: primary + 2 LLM heals
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              await executeAction(page, parsed, pages, baseUrl)
+              await executeAction(page, parsed, pages, baseUrl, locatorIndex)
               stepError = null
               break
             } catch (err) {
@@ -721,7 +779,7 @@ export async function playwrightMcpAgent(
               try {
                 await page.goto(`${baseUrl}${recovery.navTarget}`, { waitUntil: 'domcontentloaded', timeout: 20000 })
                 await waitForStable(page)
-                await executeAction(page, parsed, pages, baseUrl)
+                await executeAction(page, parsed, pages, baseUrl, locatorIndex)
                 stepError = null
                 onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: usedLocator, healingAttempts })
                 completedSteps.push({ step, status: 'passed' })
@@ -733,7 +791,7 @@ export async function playwrightMcpAgent(
               const revised = recovery.revisedSteps[0]
               parsedStepsCache[i] = revised
               try {
-                await executeAction(page, revised, pages, baseUrl)
+                await executeAction(page, revised, pages, baseUrl, locatorIndex)
                 stepError = null
                 onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: revised.locator || undefined, healingAttempts })
                 completedSteps.push({ step, status: 'passed' })

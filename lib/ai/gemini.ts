@@ -200,9 +200,31 @@ export async function streamGemini(
   throw new Error('All AI keys and models exhausted. Add more API keys to .env.local')
 }
 
+// ─── LLM response cache (per-process, avoids redundant calls for identical prompts) ──
+
+const llmCache = new Map<string, string>()
+const LLM_CACHE_MAX = 500
+
+function getCacheKey(prompt: string, systemPrompt: string): string {
+  return `${systemPrompt.slice(0, 60)}||${prompt.slice(0, 200)}`
+}
+
+function cacheSet(key: string, value: string) {
+  if (llmCache.size >= LLM_CACHE_MAX) {
+    llmCache.delete(llmCache.keys().next().value!)
+  }
+  llmCache.set(key, value)
+}
+
 // ─── Non-streaming single call (step parsing, healing) ───────────────────────
 
 export async function callLLM(prompt: string, systemPrompt: string): Promise<string> {
+  const cacheKey = getCacheKey(prompt, systemPrompt)
+  if (llmCache.has(cacheKey)) {
+    console.log('[AI] callLLM cache hit')
+    return llmCache.get(cacheKey)!
+  }
+
   const attempts = buildAttempts()
   if (attempts.length === 0) throw new Error('No AI API keys configured. Add GEMINI_API_KEY_1 or GROQ_API_KEY_1 to .env.local')
 
@@ -234,6 +256,7 @@ export async function callLLM(prompt: string, systemPrompt: string): Promise<str
         text = result.choices[0]?.message?.content ?? ''
       }
       console.log(`[AI] callLLM via ${attempt.label}`)
+      cacheSet(cacheKey, text)
       return text
     } catch (e) {
       if (isSkippableError(e)) {
