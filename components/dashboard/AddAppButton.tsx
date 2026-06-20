@@ -2,10 +2,13 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
+type AuthStrategy = 'no-auth' | 'email-password' | 'api-key'
 
 export default function AddAppButton() {
   const router = useRouter()
@@ -13,23 +16,46 @@ export default function AddAppButton() {
   const [name, setName] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [jiraProjectKey, setJiraProjectKey] = useState('')
-  const [authStrategy, setAuthStrategy] = useState<'no-auth' | 'email-password' | 'api-key'>('no-auth')
+  const [authStrategy, setAuthStrategy] = useState<AuthStrategy>('no-auth')
+  const [appEmail, setAppEmail] = useState('')
+  const [appPassword, setAppPassword] = useState('')
+  const [apiKey, setApiKey] = useState('')
   const [loading, setLoading] = useState(false)
+
+  function reset() {
+    setName(''); setBaseUrl(''); setJiraProjectKey('')
+    setAuthStrategy('no-auth'); setAppEmail(''); setAppPassword(''); setApiKey('')
+  }
 
   async function handleAdd() {
     setLoading(true)
-    await fetch('/api/apps', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name, baseUrl, jiraProjectKey, authStrategy,
-        credentialEnvVars: authStrategy === 'email-password' ? { email: 'APP_EMAIL', password: 'APP_PASSWORD' } : authStrategy === 'api-key' ? { apiKey: 'APP_API_KEY' } : {},
-      }),
-    })
-    setLoading(false)
-    setOpen(false)
-    setName(''); setBaseUrl(''); setJiraProjectKey(''); setAuthStrategy('no-auth')
-    router.refresh()
+    try {
+      const credentials: Record<string, string> = {}
+      if (authStrategy === 'email-password') {
+        if (appEmail) credentials.email = appEmail
+        if (appPassword) credentials.password = appPassword
+      } else if (authStrategy === 'api-key') {
+        if (apiKey) credentials.apiKey = apiKey
+      }
+
+      const res = await fetch('/api/apps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, baseUrl, jiraProjectKey, authStrategy, credentials }),
+      })
+      if (!res.ok) throw new Error('Failed')
+      const newApp = await res.json()
+      toast.success('Application added — starting knowledge crawl in background')
+      setOpen(false)
+      reset()
+      router.refresh()
+      // Fire-and-forget knowledge crawl
+      fetch(`/api/apps/${newApp.id}/explore`, { method: 'POST' }).catch(() => {})
+    } catch {
+      toast.error('Failed to add application. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (!open) {
@@ -61,15 +87,59 @@ export default function AddAppButton() {
           </div>
           <div className="space-y-2">
             <Label>Authentication</Label>
-            <select className="w-full border rounded-md px-3 py-2 text-sm" value={authStrategy} onChange={(e) => setAuthStrategy(e.target.value as typeof authStrategy)}>
+            <select
+              className="w-full border rounded-md px-3 py-2 text-sm"
+              value={authStrategy}
+              onChange={(e) => setAuthStrategy(e.target.value as AuthStrategy)}
+            >
               <option value="no-auth">No Authentication</option>
               <option value="email-password">Email + Password</option>
               <option value="api-key">API Key</option>
             </select>
           </div>
+
+          {authStrategy === 'email-password' && (
+            <>
+              <div className="space-y-2">
+                <Label>Email / Username</Label>
+                <Input
+                  type="email"
+                  placeholder="user@example.com"
+                  value={appEmail}
+                  onChange={(e) => setAppEmail(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  placeholder="••••••••"
+                  value={appPassword}
+                  onChange={(e) => setAppPassword(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {authStrategy === 'api-key' && (
+            <div className="space-y-2">
+              <Label>API Key</Label>
+              <Input
+                type="password"
+                placeholder="sk-..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </div>
+          )}
+
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setOpen(false)} className="flex-1">Cancel</Button>
-            <Button onClick={handleAdd} disabled={loading || !name || !baseUrl || !jiraProjectKey} className="flex-1 bg-violet-600 hover:bg-violet-700">
+            <Button variant="outline" onClick={() => { setOpen(false); reset() }} className="flex-1">Cancel</Button>
+            <Button
+              onClick={handleAdd}
+              disabled={loading || !name || !baseUrl || !jiraProjectKey}
+              className="flex-1 bg-violet-600 hover:bg-violet-700"
+            >
               {loading ? 'Adding...' : 'Add App'}
             </Button>
           </div>

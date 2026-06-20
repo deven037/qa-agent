@@ -8,6 +8,7 @@ export interface ReviewOutput {
   issues: string[]
   suggestions: string[]
   revised: boolean
+  revisedScript?: string
 }
 
 export async function reviewAgent(
@@ -69,7 +70,7 @@ IMPORTANT rules for the JSON:
     const dir = path.join(process.cwd(), appConfig.playwrightTestsDir)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, `${issueKey}.spec.ts`), result.revisedScript)
-    return { approved: false, issues: result.issues ?? [], suggestions: result.suggestions ?? [], revised: true }
+    return { approved: false, issues: result.issues ?? [], suggestions: result.suggestions ?? [], revised: true, revisedScript: result.revisedScript }
   }
 
   return { approved: result.approved ?? true, issues: result.issues ?? [], suggestions: result.suggestions ?? [], revised: false }

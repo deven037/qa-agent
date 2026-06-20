@@ -1,5 +1,6 @@
 import { streamGemini } from '@/lib/ai/gemini'
 import { JiraIssue } from '@/lib/jira/client'
+import { fillPrompt } from '@/lib/prompts/loader'
 
 export interface RequirementOutput {
   summary: string
@@ -13,25 +14,16 @@ export async function requirementAgent(
   issue: JiraIssue,
   onChunk: (text: string) => void
 ): Promise<RequirementOutput> {
-  const prompt = `Analyze this Jira user story and extract what needs to be tested.
-
-Issue Key: ${issue.key}
-Summary: ${issue.summary}
-Description: ${issue.description}
-Acceptance Criteria: ${issue.acceptanceCriteria || 'Not specified'}
-
-Return a JSON object with:
-- summary: one-sentence description of what this feature does
-- testScope: what areas need to be tested
-- preconditions: array of things that must be true before testing
-- edgeCases: array of edge cases and boundary conditions
-- riskAreas: array of high-risk areas that need extra attention
-
-Respond ONLY with valid JSON.`
+  const prompt = fillPrompt('requirement-extractor', {
+    issue_key: issue.key,
+    summary: issue.summary,
+    description: issue.description || '(not provided)',
+    acceptance_criteria: issue.acceptanceCriteria || 'Not specified',
+  })
 
   const fullText = await streamGemini(
     prompt,
-    'You are a senior QA engineer analyzing requirements. Extract testable requirements in structured JSON.',
+    'You are a senior QA engineer analyzing requirements. Extract testable requirements in structured JSON. Return JSON only.',
     onChunk
   )
 

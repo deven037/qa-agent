@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
     jiraProjectKey: app.jiraProjectKey,
     baseUrl: app.baseUrl,
     authStrategy: app.authStrategy,
-    credentialEnvVars: app.credentialEnvVars ?? {},
+    credentials: app.credentials ?? {},
+    credentialEnvVars: {},
     playwrightTestsDir: `playwright-tests/${app.name.toLowerCase().replace(/\s+/g, '-')}`,
     createdAt: new Date().toISOString(),
   }

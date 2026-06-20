@@ -16,7 +16,9 @@ export interface AppConfig {
   jiraProjectKey: string
   baseUrl: string
   authStrategy: 'no-auth' | 'email-password' | 'api-key' | 'custom'
-  credentialEnvVars: Record<string, string>
+  credentials: Record<string, string>      // actual values: { email, password, apiKey }
+  credentialEnvVars: Record<string, string> // legacy — kept for compat, prefer credentials
+  storePassword?: string                   // storefront/app-level password gate (e.g. Shopify preview stores)
   playwrightTestsDir: string
   createdAt: string
 }

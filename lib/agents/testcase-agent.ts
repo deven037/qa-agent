@@ -1,5 +1,6 @@
 import { streamGemini } from '@/lib/ai/gemini'
 import { RequirementOutput } from './requirement-agent'
+import { fillPrompt } from '@/lib/prompts/loader'
 
 export interface TestCase {
   id: string
@@ -14,48 +15,21 @@ export async function testCaseAgent(
   requirements: RequirementOutput,
   scenarios: string,
   singleTestCase: boolean,
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
+  appContext?: string
 ): Promise<TestCase[]> {
-  const prompt = singleTestCase
-    ? `Generate exactly ONE test case for this specific requirement. The work item is already a single test case, so do not generate multiple.
-
-Requirements:
-${JSON.stringify(requirements, null, 2)}
-
-Scenario:
-${scenarios}
-
-Generate exactly one test case with:
-- id: "TC-001"
-- title: clear descriptive title matching the requirement
-- type: "positive"
-- priority: "high" | "medium" | "low"
-- steps: array of specific action steps
-- expectedResult: what should happen
-
-Respond ONLY with a JSON array containing exactly one test case object.`
-    : `Generate detailed test cases based on these requirements and scenarios.
-
-Requirements:
-${JSON.stringify(requirements, null, 2)}
-
-Scenarios:
-${scenarios}
-
-Generate test cases covering positive flows, negative flows, and edge cases.
-For each test case provide:
-- id: TC-001, TC-002, etc.
-- title: clear descriptive title
-- type: "positive" | "negative" | "edge"
-- priority: "high" | "medium" | "low"
-- steps: array of numbered action steps
-- expectedResult: what should happen
-
-Respond ONLY with a JSON array of test case objects.`
+  const prompt = fillPrompt('testcase-writer', {
+    ui_knowledge: appContext || '(no UI knowledge available — use generic field names)',
+    requirements_json: JSON.stringify(requirements, null, 2),
+    scenarios,
+    mode: singleTestCase
+      ? 'single — generate exactly ONE test case with id "TC-001". The work item is already a single test case.'
+      : 'multi — generate test cases covering all scenario types listed (positive, negative, edge)',
+  })
 
   const fullText = await streamGemini(
     prompt,
-    'You are a QA engineer creating comprehensive test cases. Be specific and actionable.',
+    'You are a QA engineer creating comprehensive test cases. Be specific and actionable. Return JSON array only.',
     onChunk
   )
 

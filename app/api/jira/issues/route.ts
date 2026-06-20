@@ -10,13 +10,14 @@ export async function GET(req: NextRequest) {
   const project = searchParams.get('project') ?? ''
   const query = searchParams.get('q') ?? ''
   const mode = searchParams.get('mode') ?? 'search'
+  const type = searchParams.get('type') ?? ''
 
   try {
     if (mode === 'similar') {
       const issues = await searchJiraSimilar(project, query)
       return NextResponse.json(issues)
     }
-    const issues = await searchJiraIssues(project, query)
+    const issues = await searchJiraIssues(project, query, type || undefined)
     return NextResponse.json(issues)
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 })

@@ -5,9 +5,10 @@ import { postJiraComment } from '@/lib/jira/client'
 export async function executionAgent(
   issueKey: string,
   appConfig: AppConfig,
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
+  headed = false
 ): Promise<ExecutionResult> {
-  const result = await runPlaywrightTests(issueKey, appConfig, onChunk)
+  const result = await runPlaywrightTests(issueKey, appConfig, onChunk, 300000, headed)
 
   const summary = `[QA-RESULTS]
 Playwright Execution Results for ${issueKey}
@@ -20,7 +21,11 @@ Playwright Execution Results for ${issueKey}
 ${result.testResults.map((t) => `- [${t.status.toUpperCase()}] ${t.title}${t.error ? `\n  Error: ${t.error}` : ''}`).join('\n')}
 ${result.error ? `\nExecution Error: ${result.error}` : ''}`
 
-  await postJiraComment(issueKey, summary)
+  try {
+    await postJiraComment(issueKey, summary)
+  } catch {
+    // Non-fatal — return result even if Jira comment fails
+  }
 
   return result
 }

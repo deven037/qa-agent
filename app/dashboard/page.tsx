@@ -21,9 +21,9 @@ export default async function DashboardPage() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-slate-500">{session.user?.email}</span>
-          <Link href="/api/auth/signout">
-            <Button variant="outline" size="sm">Sign out</Button>
-          </Link>
+          <form action="/api/auth/signout" method="post">
+            <Button variant="outline" size="sm" type="submit">Sign out</Button>
+          </form>
         </div>
       </header>
 
@@ -55,7 +55,9 @@ export default async function DashboardPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400 capitalize">{app.authStrategy.replace('-', ' ')}</span>
+                      <Badge variant="secondary" className="text-xs capitalize font-normal">
+                        {app.authStrategy.replace('-', ' ')}
+                      </Badge>
                     </div>
                   </CardContent>
                 </Card>

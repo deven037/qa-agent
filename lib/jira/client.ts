@@ -160,14 +160,8 @@ export interface JiraIssueFields {
   priority?: string
 }
 
-// Maps UI labels → valid Jira issue type names (project-dependent; common defaults)
-const ISSUE_TYPE_MAP: Record<string, string> = {
-  'Story': 'Story',
-  'Bug': 'Bug',
-  'Task': 'Task',
-  'Test Case': 'Task',
-  'Epic': 'Epic',
-}
+// Pass the type name through as-is — valid types come from /api/jira/issue-types
+const ISSUE_TYPE_MAP: Record<string, string> = {}
 
 export async function createJiraIssue(projectKey: string, fields: JiraIssueFields): Promise<{ key: string; summary: string }> {
   const buildAdf = (text: string) => ({
@@ -216,7 +210,7 @@ export async function searchJiraSimilar(projectKey: string, prompt: string): Pro
   const summaryConditions = keywords.map((k) => `summary ~ "${k}"`).join(' OR ')
   const jql = `project = ${projectKey} AND (${summaryConditions}) ORDER BY created DESC`
   const res = await fetch(
-    `${getBaseUrl()}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=5&fields=summary,description`,
+    `${getBaseUrl()}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=5&fields=summary,description`,
     { headers: { Authorization: getAuthHeader(), Accept: 'application/json' } }
   )
   if (!res.ok) return []
@@ -228,12 +222,13 @@ export async function searchJiraSimilar(projectKey: string, prompt: string): Pro
   }))
 }
 
-export async function searchJiraIssues(projectKey: string, query: string): Promise<{ key: string; summary: string }[]> {
-  const jql = query
-    ? `project = ${projectKey} AND summary ~ "${query}" ORDER BY created DESC`
-    : `project = ${projectKey} ORDER BY created DESC`
+export async function searchJiraIssues(projectKey: string, query: string, issueType?: string): Promise<{ key: string; summary: string }[]> {
+  const conditions = [`project = ${projectKey}`]
+  if (query) conditions.push(`summary ~ "${query}"`)
+  if (issueType) conditions.push(`issuetype = "${issueType}"`)
+  const jql = `${conditions.join(' AND ')} ORDER BY created DESC`
   const res = await fetch(
-    `${getBaseUrl()}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=20&fields=summary`,
+    `${getBaseUrl()}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=20&fields=summary`,
     { headers: { Authorization: getAuthHeader(), Accept: 'application/json' } }
   )
   if (!res.ok) throw new Error(`Jira search failed: ${res.status}`)
@@ -247,4 +242,76 @@ export async function searchJiraIssues(projectKey: string, query: string): Promi
 export function findExistingScenarios(comments: JiraComment[]): string | null {
   const match = comments.find((c) => c.body.startsWith('[QA-SCENARIOS]'))
   return match ? match.body.replace('[QA-SCENARIOS]\n', '') : null
+}
+
+export function findExistingTestCases(comments: JiraComment[]): string | null {
+  const match = comments.find((c) => c.body.startsWith('[QA-TESTCASES]'))
+  return match ? match.body.replace('[QA-TESTCASES]\n', '') : null
+}
+
+/**
+ * Parses [QA-TESTCASES] markdown into TestCase objects.
+ * Tolerant of manual edits: extra blank lines, lowercase headers,
+ * bullet/dash/numbered steps, missing sections.
+ */
+export function parseTestCasesFromMarkdown(markdown: string): import('@/lib/agents/testcase-agent').TestCase[] {
+  // Split on --- separator (with flexible surrounding whitespace)
+  const blocks = markdown.split(/\n\s*---\s*\n/)
+  return blocks
+    .map((block, idx) => {
+      block = block.trim()
+      if (!block) return null
+
+      // Title: **TC-001: Some Title** (type | priority)
+      const titleMatch = block.match(/\*\*(.+?)\*\*/)
+      const typeMatch = block.match(/\((positive|negative|edge)/i)
+      const priorityMatch = block.match(/(high|medium|low)\s+priority/i)
+
+      const fullTitle = titleMatch?.[1]?.trim() ?? `TC-${String(idx + 1).padStart(3, '0')}: Test Case`
+      const idMatch = fullTitle.match(/^(TC-\d+)[:\s]+(.+)$/)
+
+      // Steps: find the section between "Steps:" and "Expected:" (or end of block)
+      // Case-insensitive, tolerant of extra blank lines around the header
+      const stepsMatch = block.match(/steps\s*:\s*\n([\s\S]+?)(?=\n\s*expected\s*:|$)/i)
+      const steps = stepsMatch
+        ? stepsMatch[1]
+            .split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean)
+            // Strip leading numbering (1. 2.) or bullets (- * •)
+            .map((s) => s.replace(/^(\d+[.)]\s*|[-*•]\s*)/, ''))
+            .filter(Boolean)
+        : []
+
+      // Expected: grab everything after "Expected:" to end of block
+      const expectedMatch = block.match(/expected\s*:\s*(.+)/i)
+      const expectedResult = expectedMatch?.[1]?.trim() ?? ''
+
+      return {
+        id: idMatch?.[1] ?? `TC-${String(idx + 1).padStart(3, '0')}`,
+        title: idMatch?.[2]?.trim() ?? fullTitle,
+        type: ((typeMatch?.[1]?.toLowerCase()) as import('@/lib/agents/testcase-agent').TestCase['type']) ?? 'positive',
+        priority: ((priorityMatch?.[1]?.toLowerCase()) as import('@/lib/agents/testcase-agent').TestCase['priority']) ?? 'medium',
+        steps,
+        expectedResult,
+      }
+    })
+    .filter((tc): tc is NonNullable<typeof tc> => tc !== null && tc.steps.length > 0)
+}
+
+export async function fetchAutomationScript(issueKey: string): Promise<string | null> {
+  const res = await fetch(
+    `${getBaseUrl()}/rest/api/3/issue/${issueKey}?fields=attachment`,
+    { headers: { Authorization: getAuthHeader(), Accept: 'application/json' } }
+  )
+  if (!res.ok) return null
+  const data = await res.json()
+  const attachments: { filename: string; content: string }[] = data.fields?.attachment ?? []
+  const spec = attachments.find((a) => a.filename === `${issueKey}.spec.ts`)
+  if (!spec) return null
+  const contentRes = await fetch(spec.content, {
+    headers: { Authorization: getAuthHeader() },
+  })
+  if (!contentRes.ok) return null
+  return contentRes.text()
 }

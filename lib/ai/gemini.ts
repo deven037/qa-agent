@@ -6,7 +6,7 @@ import { JiraIssueFields } from '@/lib/jira/client'
 
 function readKeys(prefix: string): string[] {
   const keys: string[] = []
-  for (let i = 1; i <= 10; i++) {
+  for (let i = 1; i <= 20; i++) {
     const val = process.env[`${prefix}_${i}`]
     if (val && val.trim()) keys.push(val.trim())
   }
@@ -25,8 +25,26 @@ interface Attempt {
   label: string
 }
 
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro']
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it']
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-pro',
+  'gemini-2.5-flash-preview-04-17',
+]
+const GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-70b-versatile',
+  'llama-3.1-8b-instant',
+  'llama3-70b-8192',
+  'llama3-8b-8192',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+  'qwen-qwq-32b',
+  'deepseek-r1-distill-llama-70b',
+  'compound-beta',
+]
 
 function buildAttempts(): Attempt[] {
   const attempts: Attempt[] = []
@@ -114,6 +132,41 @@ export async function streamGemini(
     }
   }
 
+  throw new Error('All AI keys and models exhausted. Add more API keys to .env.local')
+}
+
+// ─── Non-streaming single call (step parsing, healing) ───────────────────────
+
+export async function callLLM(prompt: string, systemPrompt: string): Promise<string> {
+  const attempts = buildAttempts()
+  if (attempts.length === 0) throw new Error('No AI API keys configured. Add GEMINI_API_KEY_1 or GROQ_API_KEY_1 to .env.local')
+
+  for (const attempt of attempts) {
+    try {
+      let text: string
+      if (attempt.provider === 'gemini') {
+        const client = new GoogleGenerativeAI(attempt.key)
+        const m = client.getGenerativeModel({ model: attempt.model, systemInstruction: systemPrompt })
+        const result = await m.generateContent(prompt)
+        text = result.response.text()
+      } else {
+        const groq = new Groq({ apiKey: attempt.key })
+        const result = await groq.chat.completions.create({
+          model: attempt.model,
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+        })
+        text = result.choices[0]?.message?.content ?? ''
+      }
+      console.log(`[AI] callLLM via ${attempt.label}`)
+      return text
+    } catch (e) {
+      if (isSkippableError(e)) {
+        console.warn(`[AI] Quota/rate limit on ${attempt.label}, trying next...`)
+        continue
+      }
+      throw e
+    }
+  }
   throw new Error('All AI keys and models exhausted. Add more API keys to .env.local')
 }
 
