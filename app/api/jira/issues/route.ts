@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/auth'
-import { searchJiraIssues, searchJiraSimilar, createJiraIssue } from '@/lib/jira/client'
+import { searchJiraIssues, searchJiraSimilar, createJiraIssue, getJiraAccountId } from '@/lib/jira/client'
 import { generateWorkItemFields } from '@/lib/ai/gemini'
 
 export async function GET(req: NextRequest) {
@@ -33,6 +33,11 @@ export async function POST(req: NextRequest) {
   try {
     // If fields are already provided (user confirmed preview), create directly
     if (fields) {
+      // Auto-assign to the logged-in user's Jira account
+      if (!fields.assigneeAccountId && session.user?.email) {
+        const accountId = await getJiraAccountId(session.user.email)
+        if (accountId) fields.assigneeAccountId = accountId
+      }
       const issue = await createJiraIssue(project, fields)
       return NextResponse.json(issue)
     }

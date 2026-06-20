@@ -5,6 +5,11 @@ export interface JiraChild {
   status: string
 }
 
+export interface TestStep {
+  step: string
+  expected: string
+}
+
 export interface JiraIssue {
   key: string
   summary: string
@@ -12,6 +17,9 @@ export interface JiraIssue {
   status: string
   priority: string
   reporter: string
+  assignee: string
+  assigneeAvatar: string
+  reporterAvatar: string
   created: string
   description: string
   acceptanceCriteria: string
@@ -19,6 +27,7 @@ export interface JiraIssue {
   children: JiraChild[]
   parentKey?: string
   parentSummary?: string
+  testSteps?: TestStep[]
 }
 
 export interface JiraComment {
@@ -46,6 +55,64 @@ function getAuthHeader() {
   return `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`
 }
 
+// ── ADF test-step table helpers ───────────────────────────────────────────────
+
+export function buildTestStepAdf(steps: TestStep[]): object {
+  function cell(text: string, isHeader = false) {
+    return {
+      type: isHeader ? 'tableHeader' : 'tableCell',
+      attrs: {},
+      content: [{ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] }],
+    }
+  }
+  return {
+    type: 'doc',
+    version: 1,
+    content: [
+      {
+        type: 'table',
+        attrs: { isNumberColumnEnabled: false, layout: 'default' },
+        content: [
+          {
+            type: 'tableRow',
+            content: [cell('#', true), cell('Test Step', true), cell('Expected Result', true)],
+          },
+          ...steps.map((s, i) => ({
+            type: 'tableRow',
+            content: [cell(String(i + 1)), cell(s.step), cell(s.expected)],
+          })),
+        ],
+      },
+    ],
+  }
+}
+
+function parseTestStepsFromAdf(adf: unknown): TestStep[] | null {
+  if (!adf || typeof adf !== 'object') return null
+  const doc = adf as { content?: unknown[] }
+  const table = doc.content?.find((n: unknown) => (n as { type?: string }).type === 'table') as { content?: unknown[] } | undefined
+  if (!table) return null
+
+  const rows = (table.content ?? []) as { type: string; content: unknown[] }[]
+  const dataRows = rows.filter((r) => r.type === 'tableRow').slice(1) // skip header
+  if (dataRows.length === 0) return null
+
+  return dataRows.map((row) => {
+    const cells = (row.content ?? []) as { content: unknown[] }[]
+    const getText = (cell: { content: unknown[] }) => {
+      const para = (cell.content ?? []) as { content?: unknown[] }[]
+      return para.flatMap((p) => (p.content ?? []) as { type?: string; text?: string }[])
+        .filter((n) => n.type === 'text')
+        .map((n) => n.text ?? '')
+        .join('')
+    }
+    return {
+      step: getText(cells[1] ?? { content: [] }),
+      expected: getText(cells[2] ?? { content: [] }),
+    }
+  }).filter(s => s.step || s.expected)
+}
+
 function adfToText(adf: unknown): string {
   if (!adf || typeof adf !== 'object') return String(adf ?? '')
   const node = adf as { type?: string; text?: string; content?: unknown[] }
@@ -54,6 +121,25 @@ function adfToText(adf: unknown): string {
     return node.content.map(adfToText).join(node.type === 'paragraph' ? '\n' : '')
   }
   return ''
+}
+
+export async function getJiraAccountId(email: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${getBaseUrl()}/rest/api/3/users/search?query=${encodeURIComponent(email)}&maxResults=10`,
+      { headers: { Authorization: getAuthHeader(), Accept: 'application/json' } }
+    )
+    if (!res.ok) return null
+    const users = await res.json()
+    const match = Array.isArray(users)
+      ? users.find((u: { emailAddress?: string; accountType?: string }) =>
+          u.emailAddress?.toLowerCase() === email.toLowerCase() && u.accountType === 'atlassian'
+        )
+      : null
+    return match?.accountId ?? null
+  } catch {
+    return null
+  }
 }
 
 export async function verifyJiraUser(email: string): Promise<boolean> {
@@ -80,7 +166,9 @@ export async function fetchJiraIssue(issueKey: string): Promise<JiraIssue> {
   if (!res.ok) throw new Error(`Jira fetch failed: ${res.status}`)
   const data = await res.json()
 
-  const description = adfToText(data.fields.description)
+  const rawDesc = data.fields.description
+  const testSteps = parseTestStepsFromAdf(rawDesc) ?? undefined
+  const description = adfToText(rawDesc)
 
   const commentsRes = await fetch(`${getBaseUrl()}/rest/api/3/issue/${issueKey}/comment`, {
     headers: { Authorization: getAuthHeader(), Accept: 'application/json' },
@@ -125,8 +213,12 @@ export async function fetchJiraIssue(issueKey: string): Promise<JiraIssue> {
     acceptanceCriteria,
     comments,
     children,
+    assignee: data.fields.assignee?.displayName ?? '',
+    assigneeAvatar: data.fields.assignee?.avatarUrls?.['24x24'] ?? '',
+    reporterAvatar: data.fields.reporter?.avatarUrls?.['24x24'] ?? '',
     parentKey: parentField?.key,
     parentSummary: parentField?.fields?.summary,
+    testSteps,
   }
 }
 
@@ -191,6 +283,8 @@ export interface JiraIssueFields {
   description: string
   issueType: string
   parentKey?: string
+  assigneeAccountId?: string
+  reporterAccountId?: string
   acceptanceCriteria?: string
   stepsToReproduce?: string
   expectedResult?: string
@@ -220,6 +314,8 @@ export async function createJiraIssue(projectKey: string, fields: JiraIssueField
       description: buildAdf(fields.description),
       issuetype: { name: ISSUE_TYPE_MAP[fields.issueType] ?? fields.issueType },
       ...(fields.parentKey ? { parent: { key: fields.parentKey } } : {}),
+      ...(fields.assigneeAccountId ? { assignee: { accountId: fields.assigneeAccountId } } : {}),
+      ...(fields.reporterAccountId ? { reporter: { accountId: fields.reporterAccountId } } : {}),
     },
   }
 
@@ -265,7 +361,16 @@ export async function searchJiraSimilar(projectKey: string, prompt: string): Pro
 
 export async function searchJiraIssues(projectKey: string, query: string, issueType?: string): Promise<{ key: string; summary: string }[]> {
   const conditions = [`project = ${projectKey}`]
-  if (query) conditions.push(`summary ~ "${query}"`)
+  if (query) {
+    const isKey = /^[A-Z]+-\d+$/i.test(query.trim())
+    if (isKey) {
+      conditions.push(`key = "${query.trim().toUpperCase()}"`)
+    } else {
+      // Use text ~ for full-text search (covers summary, description, comments)
+      // Also try summary ~ for partial word matches
+      conditions.push(`(summary ~ "${query}*" OR text ~ "${query}")`)
+    }
+  }
   if (issueType) conditions.push(`issuetype = "${issueType}"`)
   const jql = `${conditions.join(' AND ')} ORDER BY created DESC`
   const res = await fetch(

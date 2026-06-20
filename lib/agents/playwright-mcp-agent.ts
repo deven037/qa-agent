@@ -1,4 +1,4 @@
-import { chromium, Browser, Page, Locator } from 'playwright'
+import { chromium, Browser, Page, Locator, FrameLocator } from 'playwright'
 import { AppConfig } from '@/lib/config/store'
 import { PageKnowledge } from '@/lib/db/models/AppKnowledge'
 import { TestCase } from '@/lib/agents/testcase-agent'
@@ -6,7 +6,7 @@ import { callLLM } from '@/lib/ai/gemini'
 import { fillPrompt } from '@/lib/prompts/loader'
 import { formatPagesForParsing, formatLocatorsForCurrentPage, formatKnowledgeForAnalyst } from '@/lib/knowledge/formatter'
 
-// ─── Shared event types (imported by route and UI) ────────────────────────────
+// ─── Shared event types ───────────────────────────────────────────────────────
 
 export interface AgentEvent {
   type: 'tc_start' | 'step_start' | 'step_heal' | 'step_done' | 'tc_done' | 'tc_analyzing' | 'log'
@@ -45,6 +45,7 @@ interface ParsedStep {
   action: 'navigate' | 'click' | 'fill' | 'assert' | 'wait'
   target: string
   value?: string
+  locator?: string
 }
 
 // ─── Locator resolution ───────────────────────────────────────────────────────
@@ -52,37 +53,30 @@ interface ParsedStep {
 function resolveLocatorString(page: Page, locatorStr: string): Locator {
   let m: RegExpMatchArray | null
 
-  // getByLabel — match quoted content (handles escaped quotes inside via .+? non-greedy)
   m = locatorStr.match(/getByLabel\(['"](.+?)['"]\s*(?:,\s*\{[^}]*\})?\)/)
   if (m) return page.getByLabel(m[1], { exact: false })
 
-  // getByPlaceholder
   m = locatorStr.match(/getByPlaceholder\(['"](.+?)['"]\s*(?:,\s*\{[^}]*\})?\)/)
   if (m) return page.getByPlaceholder(m[1], { exact: false })
 
-  // getByRole with name option — must come before bare getByRole
   m = locatorStr.match(/getByRole\(['"](\w+)['"]\s*,\s*\{[^}]*name:\s*['"](.+?)['"]\s*[^}]*\}/)
   if (m) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return page.getByRole(m[1] as any, { name: m[2], exact: false })
   }
 
-  // getByRole bare (no name)
   m = locatorStr.match(/getByRole\(['"](\w+)['"]\s*\)/)
   if (m) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return page.getByRole(m[1] as any)
   }
 
-  // getByText
   m = locatorStr.match(/getByText\(['"](.+?)['"]\s*(?:,\s*\{[^}]*\})?\)/)
   if (m) return page.getByText(m[1], { exact: false })
 
-  // page.locator('selector') — handles input[name="..."], [aria-label="..."], CSS
   m = locatorStr.match(/locator\(['"](.+?)['"]\)/)
   if (m) return page.locator(m[1])
 
-  // Last resort — treat entire string as a CSS selector
   return page.locator(locatorStr)
 }
 
@@ -130,58 +124,62 @@ function findBestLocator(target: string, pages: PageKnowledge[]): string | null 
   return (best as { locator: string; score: number } | null)?.locator ?? null
 }
 
-// ─── Step parsing ─────────────────────────────────────────────────────────────
-
-async function parseSteps(steps: string[], pages: PageKnowledge[], appConfig: AppConfig): Promise<ParsedStep[]> {
-  const prompt = fillPrompt('step-parser', {
-    app_name: appConfig.name,
-    base_url: appConfig.baseUrl,
-    pages_list: formatPagesForParsing(pages),
-    numbered_steps: steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
-    step_count: String(steps.length),
-  })
-
-  try {
-    const raw = await callLLM(prompt, 'You are a test automation expert. Return valid JSON arrays only. No markdown.')
-    const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
-    const match = cleaned.match(/\[[\s\S]*\]/)
-    if (!match) throw new Error('No JSON array')
-    const parsed = JSON.parse(match[0]) as ParsedStep[]
-    if (parsed.length === steps.length) return parsed
-    while (parsed.length < steps.length) parsed.push({ action: 'click', target: steps[parsed.length] })
-    return parsed.slice(0, steps.length)
-  } catch {
-    // Regex-based fallback
-    return steps.map((step): ParsedStep => {
-      const lower = step.toLowerCase()
-      if (/navigat|go to|open|visit/.test(lower)) {
-        const pathMatch = step.match(/\/[a-z/\-_]+/)
-        return { action: 'navigate', target: pathMatch?.[0] || '/' }
+// Returns only the byName (CSS input[name=...]) locator from KB — most reliable
+// on sites with broken ARIA (e.g. Shopify's <div id="X"> / <input id="X"> pattern)
+function findBestLocatorByName(target: string, pages: PageKnowledge[]): string | null {
+  const tl = target.toLowerCase().trim()
+  let best: { locator: string; score: number } | null = null
+  const consider = (locator: string | null | undefined, score: number) => {
+    if (locator && score > ((best as { locator: string; score: number } | null)?.score ?? 0))
+      best = { locator, score }
+  }
+  for (const pg of pages) {
+    for (const form of pg.forms) {
+      for (const field of form.fields) {
+        const name = (field.label || field.placeholder || field.htmlName || '').toLowerCase()
+        const score = scoreMatch(name, tl)
+        if (score > 0) consider(field.locators.byName, score)
       }
-      if (/fill|enter|type|input/.test(lower)) {
-        const valueMatch = step.match(/['"]([^'"]+)['"]/) || step.match(/:\s+(.+)$/)
-        return { action: 'fill', target: step, value: valueMatch?.[1] || '' }
+    }
+  }
+  return (best as { locator: string; score: number } | null)?.locator ?? null
+}
+
+// ─── Page stability ───────────────────────────────────────────────────────────
+
+async function waitForStable(page: Page): Promise<void> {
+  await page.waitForLoadState('domcontentloaded').catch(() => {})
+  await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {})
+}
+
+// ─── Overlay dismissal ────────────────────────────────────────────────────────
+
+async function dismissOverlays(page: Page): Promise<void> {
+  const selectors = [
+    '[aria-label*="close" i]',
+    '[aria-label*="dismiss" i]',
+    '[class*="cookie"] button',
+    '[class*="modal__close"]',
+    '[data-dismiss]',
+    'button:has-text("Accept")',
+    'button:has-text("Accept all")',
+    'button:has-text("Got it")',
+    'button:has-text("Dismiss")',
+  ]
+  for (const sel of selectors) {
+    try {
+      const el = page.locator(sel).first()
+      if (await el.isVisible({ timeout: 400 })) {
+        await el.click({ timeout: 1000 })
       }
-      if (/click|press|submit|tap/.test(lower)) return { action: 'click', target: step }
-      if (/verify|assert|check|should|expect/.test(lower)) return { action: 'assert', target: 'url', value: '' }
-      if (/wait|until/.test(lower)) return { action: 'wait', target: 'url', value: '' }
-      return { action: 'click', target: step }
-    })
+    } catch { /* overlay may not exist */ }
   }
 }
 
-// ─── Self-healing ─────────────────────────────────────────────────────────────
+// ─── ARIA snapshot ────────────────────────────────────────────────────────────
 
 async function getAriaSnapshot(page: Page): Promise<string> {
-  // Scroll down then back to top to trigger lazy-loaded content before snapshot
   try {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await page.waitForTimeout(300)
-    await page.evaluate(() => window.scrollTo(0, 0))
-  } catch { /* ignore */ }
-
-  try {
-    // Prefer main content area to avoid nav/footer noise
     const main = page.locator('main, [role="main"], #content, #app, body').first()
     const snap = await main.ariaSnapshot({ timeout: 5000 })
     return snap.slice(0, 6000)
@@ -193,6 +191,205 @@ async function getAriaSnapshot(page: Page): Promise<string> {
     }
   }
 }
+
+// ─── DOM field extraction ─────────────────────────────────────────────────────
+// Extracts raw input metadata directly from DOM — bypasses ARIA bugs like
+// Shopify's pattern where <div id="X"> shadows <input id="X">.
+
+async function extractDomFields(page: Page): Promise<string> {
+  try {
+    const fields = await page.evaluate(() => {
+      return Array.from(
+        document.querySelectorAll<HTMLInputElement>('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select')
+      ).map(el => {
+        const labelEl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null
+        const ariaLabel = el.getAttribute('aria-label') || ''
+        return {
+          label: labelEl?.textContent?.trim() || ariaLabel,
+          name: el.name || '',
+          id: el.id || '',
+          type: (el as HTMLInputElement).type || 'text',
+          placeholder: (el as HTMLInputElement).placeholder || '',
+        }
+      }).filter(f => f.name || f.label || f.id)
+    })
+    if (fields.length === 0) return '(no interactive form fields found)'
+    return fields.map(f =>
+      `  label="${f.label}" name="${f.name}" id="${f.id}" type="${f.type}" placeholder="${f.placeholder}"`
+    ).join('\n')
+  } catch {
+    return '(could not extract DOM fields)'
+  }
+}
+
+// ─── Robust action helpers ────────────────────────────────────────────────────
+
+async function tryFill(locator: Locator, value: string): Promise<boolean> {
+  try {
+    const first = locator.first()
+    await first.waitFor({ state: 'visible', timeout: 3000 })
+    if (!await first.isEnabled()) return false
+    await first.scrollIntoViewIfNeeded()
+    // Triple-click selects all pre-existing text before typing
+    await first.click({ clickCount: 3, timeout: 2000 })
+    try {
+      await first.fill(value, { timeout: 3000 })
+    } catch {
+      // Slow-type fallback for React/Vue controlled inputs
+      await first.press('Control+a')
+      await first.type(value, { delay: 30 })
+    }
+    // Fire DOM events for JS-driven inputs
+    await first.dispatchEvent('input')
+    await first.dispatchEvent('change')
+    return true
+  } catch { return false }
+}
+
+async function tryClick(locator: Locator): Promise<boolean> {
+  try {
+    const first = locator.first()
+    await first.waitFor({ state: 'visible', timeout: 3000 })
+    await first.scrollIntoViewIfNeeded()
+    // Hover first — some elements only become clickable on hover
+    await first.hover({ timeout: 1000 }).catch(() => {})
+    await first.click({ timeout: 5000 })
+    return true
+  } catch {
+    // Force-click bypasses pointer-events:none / overlay coverage
+    try {
+      await locator.first().click({ force: true, timeout: 3000 })
+      return true
+    } catch { return false }
+  }
+}
+
+// ─── iframe-aware search ──────────────────────────────────────────────────────
+
+async function findAcrossFrames(
+  page: Page,
+  buildLocator: (ctx: Page | FrameLocator) => Locator,
+  action: (loc: Locator) => Promise<boolean>,
+): Promise<boolean> {
+  if (await action(buildLocator(page))) return true
+
+  const frames = page.frames().filter(f => f !== page.mainFrame())
+  for (const frame of frames) {
+    try {
+      const fl = page.frameLocator(`iframe[src="${frame.url()}"], iframe`).first()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (await action(buildLocator(fl as any))) return true
+    } catch { /* skip frame */ }
+  }
+  return false
+}
+
+// ─── Regex fast path ──────────────────────────────────────────────────────────
+
+function parseStepRegex(step: string): ParsedStep | null {
+  let m: RegExpMatchArray | null
+
+  m = step.match(/^navigat\w*\s+to\s+(\S+)/i)
+  if (m) return { action: 'navigate', target: m[1] }
+
+  m = step.match(/^(?:go\s+to|open|visit)\s+(\S+)/i)
+  if (m) return { action: 'navigate', target: m[1] }
+
+  m = step.match(/^fill\s+['"](.+?)['"]\s+with\s+['"](.+?)['"]/i)
+  if (m) return { action: 'fill', target: m[1], value: m[2] }
+
+  m = step.match(/^(?:enter|type|input)\s+['"](.+?)['"]\s+(?:in(?:to)?|for)\s+['"](.+?)['"]/i)
+  if (m) return { action: 'fill', target: m[2], value: m[1] }
+
+  m = step.match(/^click\s+(?:on\s+)?['"](.+?)['"]/i)
+  if (m) return { action: 'click', target: m[1] }
+
+  m = step.match(/^(?:press|submit|tap)\s+['"](.+?)['"]/i)
+  if (m) return { action: 'click', target: m[1] }
+
+  m = step.match(/^verify\s+url\s+(?:contains|includes)\s+(\S+)/i)
+  if (m) return { action: 'assert', target: 'url', value: m[1] }
+
+  m = step.match(/^verify\s+['"](.+?)['"]\s+(?:is\s+)?(?:visible|shown|displayed)/i)
+  if (m) return { action: 'assert', target: m[1] }
+
+  m = step.match(/^(?:wait\s+for|wait)\s+['"](.+?)['"]/i)
+  if (m) return { action: 'wait', target: m[1] }
+
+  return null
+}
+
+// ─── Proactive LLM step resolver ─────────────────────────────────────────────
+
+async function resolveStepWithLLM(
+  page: Page,
+  step: string,
+  expected: string,
+  pages: PageKnowledge[],
+  appConfig: AppConfig,
+): Promise<ParsedStep> {
+  await waitForStable(page)
+  const [ariaSnap, domFields] = await Promise.all([getAriaSnapshot(page), extractDomFields(page)])
+  const kbHints = formatPagesForParsing(pages)
+
+  const prompt = fillPrompt('step-resolver', {
+    current_url: page.url(),
+    aria_snapshot: ariaSnap,
+    dom_fields: domFields,
+    knowledge_base: kbHints,
+    step,
+    expected: expected || '(not specified)',
+  })
+
+  try {
+    const raw = await callLLM(prompt, 'You are a Playwright automation expert. Return a single JSON object only. No markdown.')
+    const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
+    const match = cleaned.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('No JSON object in response')
+    const parsed = JSON.parse(match[0]) as ParsedStep
+    if (!parsed.action || !parsed.target) throw new Error('Missing action or target')
+    return parsed
+  } catch {
+    // Regex fallback when LLM fails
+    const lower = step.toLowerCase()
+    if (/navigat|go to|open|visit/.test(lower)) {
+      const pathMatch = step.match(/\/[a-z/\-_]+/)
+      return { action: 'navigate', target: pathMatch?.[0] || '/' }
+    }
+    if (/fill|enter|type|input/.test(lower)) {
+      const valueMatch = step.match(/['"]([^'"]+)['"]/)
+      return { action: 'fill', target: step, value: valueMatch?.[1] || '' }
+    }
+    if (/click|press|submit|tap/.test(lower)) return { action: 'click', target: step }
+    if (/verify|assert|check|should|expect/.test(lower)) return { action: 'assert', target: 'url', value: '' }
+    return { action: 'wait', target: 'page_load' }
+  }
+}
+
+// ─── Per-step expected result assertion ───────────────────────────────────────
+
+async function assertExpectedResult(page: Page, expected: string): Promise<void> {
+  if (!expected || expected === '(not specified)') return
+  await waitForStable(page)
+
+  // URL assertion
+  const urlMatch = expected.match(/\/[a-z0-9/_-]+/)
+  if (urlMatch && /redirect|url|navigat|page/i.test(expected)) {
+    if (!page.url().includes(urlMatch[0])) {
+      throw new Error(`Expected URL to contain "${urlMatch[0]}", got "${page.url()}"`)
+    }
+    return
+  }
+
+  // Quoted text visibility
+  const quoted = expected.match(/['"]([^'"]{3,})['"]/)
+  if (quoted) {
+    const visible = await page.getByText(quoted[1], { exact: false }).isVisible({ timeout: 3000 }).catch(() => false)
+    if (!visible) throw new Error(`Expected "${quoted[1]}" to be visible on page`)
+  }
+}
+
+// ─── Self-healing ─────────────────────────────────────────────────────────────
 
 async function healStep(
   page: Page,
@@ -228,7 +425,6 @@ async function healStep(
 
     const result = JSON.parse(match[0]) as { locator: string; rationale: string }
 
-    // Verify the healed locator actually finds an element before committing to it
     try {
       const resolved = resolveLocatorString(page, result.locator)
       const count = await resolved.count()
@@ -237,7 +433,6 @@ async function healStep(
         return null
       }
     } catch {
-      // resolveLocatorString or count threw — discard the locator, don't waste an attempt
       return null
     }
 
@@ -312,57 +507,71 @@ async function analyzeStuckScenario(
 
 // ─── Action executor ──────────────────────────────────────────────────────────
 
-async function tryFill(loc: Locator, val: string, timeout = 7000): Promise<boolean> {
-  try {
-    await loc.first().waitFor({ state: 'visible', timeout })
-    await loc.first().fill(val, { timeout })
-    return true
-  } catch { return false }
-}
-
-async function tryClick(loc: Locator, timeout = 7000): Promise<boolean> {
-  try {
-    await loc.first().waitFor({ state: 'visible', timeout })
-    await loc.first().click({ timeout })
-    return true
-  } catch { return false }
-}
-
-async function executeAction(page: Page, parsed: ParsedStep, resolvedLocator: string | null, baseUrl: string): Promise<void> {
+async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledge[], baseUrl: string): Promise<void> {
   const { action, target, value } = parsed
+  const resolvedLocator = parsed.locator && parsed.locator.length > 0 ? parsed.locator : null
+
+  if (action === 'fill' || action === 'click') {
+    await dismissOverlays(page)
+    await waitForStable(page)
+  }
 
   switch (action) {
     case 'navigate': {
       const path = target.startsWith('http') ? target : `${baseUrl}${target.startsWith('/') ? '' : '/'}${target}`
       await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 20000 })
+      await waitForStable(page)
       const afterUrl = page.url()
-      // Detect silent redirect to login (auth wall blocked navigation)
       if (afterUrl.includes('login') && !path.includes('login') && !path.includes('signin')) {
-        throw new Error(`Navigation blocked — redirected to login page. Expected: ${path}, got: ${afterUrl}`)
+        throw new Error(`Navigation blocked — redirected to login. Expected: ${path}, got: ${afterUrl}`)
       }
       break
     }
 
     case 'fill': {
       const fillVal = value || ''
-      // 1. Specific RAG or healed locator (most accurate)
+
+      // 1. LLM-resolved locator — grounded in live ARIA + raw DOM fields (primary)
       if (resolvedLocator && await tryFill(resolveLocatorString(page, resolvedLocator), fillVal)) break
-      // 2. Semantic fallbacks — work on most well-built apps
-      if (await tryFill(page.getByLabel(target, { exact: false }), fillVal)) break
-      if (await tryFill(page.getByPlaceholder(target, { exact: false }), fillVal)) break
-      if (await tryFill(page.getByRole('textbox', { name: target, exact: false }), fillVal)) break
-      throw new Error(`Could not fill "${target}" — tried specific locator, getByLabel, getByPlaceholder, getByRole(textbox) (current URL: ${page.url()})`)
+      // 2. KB byName CSS selector — input[name="..."] is immune to ARIA bugs (reliable fallback)
+      const kbByName = findBestLocatorByName(target, pages)
+      if (kbByName && await tryFill(resolveLocatorString(page, kbByName), fillVal)) break
+      // 3. KB primary locator (getByLabel/getByRole) — for sites with clean ARIA
+      const kbLocatorFill = findBestLocator(target, pages)
+      if (kbLocatorFill && await tryFill(resolveLocatorString(page, kbLocatorFill), fillVal)) break
+
+      throw new Error(`Could not fill "${target}". LLM locator: ${resolvedLocator || '(none)'}. URL: ${page.url()}`)
     }
 
     case 'click': {
-      // 1. Specific RAG or healed locator
+      const slugDash = target.toLowerCase().replace(/\s+/g, '-')
+
+      // 1. LLM-resolved locator — grounded in live ARIA (primary)
       if (resolvedLocator && await tryClick(resolveLocatorString(page, resolvedLocator))) break
-      // 2. Semantic fallbacks
+      // 2. KB locator
+      const kbLocatorClick = findBestLocator(target, pages)
+      if (kbLocatorClick && await tryClick(resolveLocatorString(page, kbLocatorClick))) break
+      // 3. button
       if (await tryClick(page.getByRole('button', { name: target, exact: false }))) break
+      // 4. link
       if (await tryClick(page.getByRole('link', { name: target, exact: false }))) break
+      // 5. text match
       if (await tryClick(page.getByText(target, { exact: false }))) break
+      // 6. menuitem
       if (await tryClick(page.getByRole('menuitem', { name: target, exact: false }))) break
-      throw new Error(`Could not click "${target}" — tried specific locator, button/link/text/menuitem (current URL: ${page.url()})`)
+      // 7. tab
+      if (await tryClick(page.getByRole('tab', { name: target, exact: false }))) break
+      // 8. data-testid
+      if (await tryClick(page.locator(`[data-testid*="${slugDash}"]`))) break
+      // 9. iframe fallback
+      const iframeClicked = await findAcrossFrames(
+        page,
+        (ctx) => (ctx as Page).getByRole('button', { name: target, exact: false }),
+        tryClick,
+      )
+      if (iframeClicked) break
+
+      throw new Error(`Could not click "${target}" — tried 9 strategies. URL: ${page.url()}`)
     }
 
     case 'assert': {
@@ -386,18 +595,18 @@ async function executeAction(page: Page, parsed: ParsedStep, resolvedLocator: st
 
     case 'wait': {
       const tl = target.toLowerCase()
-      if (tl === 'url' || tl.includes('url') || tl.includes('redirect') || tl.includes('navigat')) {
+      if (tl === 'page_load' || tl === 'url' || tl.includes('url') || tl.includes('redirect') || tl.includes('navigat')) {
         if (value) {
           const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
           await page.waitForURL(new RegExp(escaped), { timeout: 15000 })
         } else {
-          await page.waitForLoadState('domcontentloaded', { timeout: 10000 })
+          await waitForStable(page)
         }
       } else if (resolvedLocator) {
         const loc = resolveLocatorString(page, resolvedLocator)
         await loc.waitFor({ timeout: 10000 })
       } else {
-        await page.waitForLoadState('domcontentloaded', { timeout: 10000 })
+        await waitForStable(page)
       }
       break
     }
@@ -417,7 +626,6 @@ export async function playwrightMcpAgent(
   const baseUrl = appConfig.baseUrl.replace(/\/$/, '')
 
   const tcResults: ExecutionResult['testResults'] = []
-
   const browser: Browser = await chromium.launch({ headless: !headed })
 
   try {
@@ -431,9 +639,6 @@ export async function playwrightMcpAgent(
         continue
       }
 
-      onEvent({ type: 'log', text: `Parsing ${tc.steps.length} steps for ${tc.id}…` })
-      let parsedSteps = await parseSteps(tc.steps, pages, appConfig)
-
       const ctx = await browser.newContext({
         ignoreHTTPSErrors: true,
         viewport: { width: 1280, height: 800 },
@@ -443,55 +648,80 @@ export async function playwrightMcpAgent(
       let tcFailed = false
       let tcError: string | undefined
       const completedSteps: { step: string; status: string }[] = []
+      // Cache resolved steps so analyst revisions can override them
+      const parsedStepsCache: (ParsedStep | null)[] = new Array(tc.steps.length).fill(null)
 
       try {
         for (let i = 0; i < tc.steps.length; i++) {
           const step = tc.steps[i]
-          const parsed = parsedSteps[i]
+          const expected = tc.stepExpected?.[i] ?? ''
 
           onEvent({ type: 'step_start', tcId: tc.id, stepIndex: i, step })
 
-          let resolvedLocator =
-            parsed.action === 'fill' || parsed.action === 'click'
-              ? findBestLocator(parsed.target, pages)
-              : null
+          // Resolve step:
+          // - navigate/assert/wait: regex is deterministic, no LLM needed
+          // - fill/click: regex parses action/target/value but ALWAYS calls LLM for a
+          //   page-grounded locator (reads live ARIA + raw DOM fields so it picks the
+          //   right selector even on sites with broken ARIA like Shopify)
+          let parsed: ParsedStep
+          if (parsedStepsCache[i]) {
+            parsed = parsedStepsCache[i]!
+          } else {
+            const regexParsed = parseStepRegex(step)
+            if (regexParsed && (regexParsed.action === 'navigate' || regexParsed.action === 'assert' || regexParsed.action === 'wait')) {
+              parsed = regexParsed
+            } else {
+              const llmParsed = await resolveStepWithLLM(page, step, expected, pages, appConfig)
+              parsed = regexParsed ? { ...regexParsed, locator: llmParsed.locator || regexParsed.locator } : llmParsed
+            }
+            parsedStepsCache[i] = parsed
+          }
 
           let stepError: Error | null = null
           let healingAttempts = 0
-          let usedLocator = resolvedLocator || undefined
+          let usedLocator = parsed.locator || findBestLocator(parsed.target, pages) || undefined
 
+          // Up to 3 attempts: primary + 2 LLM heals
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              await executeAction(page, parsed, resolvedLocator, baseUrl)
+              await executeAction(page, parsed, pages, baseUrl)
               stepError = null
               break
             } catch (err) {
               stepError = err instanceof Error ? err : new Error(String(err))
               if (attempt < 2) {
-                // Pass the last tried locator so the healer doesn't suggest the same one
                 const healed = await healStep(
                   page, step, parsed, stepError, pages, onEvent,
-                  tc.id, i, attempt + 1, resolvedLocator ?? undefined,
+                  tc.id, i, attempt + 1, usedLocator,
                 )
                 if (healed) {
-                  resolvedLocator = healed
+                  parsed = { ...parsed, locator: healed }
+                  parsedStepsCache[i] = parsed
                   usedLocator = healed
                   healingAttempts++
                 }
-                // Do NOT break on null — let the loop try again with semantic fallbacks in executeAction
               }
             }
           }
 
+          // Check expected result after successful action
+          if (!stepError && expected) {
+            try {
+              await assertExpectedResult(page, expected)
+            } catch (assertErr) {
+              stepError = assertErr instanceof Error ? assertErr : new Error(String(assertErr))
+            }
+          }
+
           if (stepError) {
-            // All healing attempts exhausted — call scenario analyst before giving up
+            // Scenario analyst as last resort
             const recovery = await analyzeStuckScenario(page, tc, i, completedSteps, tc.steps.slice(i + 1), pages, onEvent)
 
             if (recovery.action === 'navigate' && recovery.navTarget) {
-              // Navigate to the right page and retry the stuck step once
               try {
                 await page.goto(`${baseUrl}${recovery.navTarget}`, { waitUntil: 'domcontentloaded', timeout: 20000 })
-                await executeAction(page, parsed, resolvedLocator, baseUrl)
+                await waitForStable(page)
+                await executeAction(page, parsed, pages, baseUrl)
                 stepError = null
                 onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: usedLocator, healingAttempts })
                 completedSteps.push({ step, status: 'passed' })
@@ -500,25 +730,19 @@ export async function playwrightMcpAgent(
                 stepError = retryErr instanceof Error ? retryErr : new Error(String(retryErr))
               }
             } else if (recovery.action === 'revise' && recovery.revisedSteps && recovery.revisedSteps.length > 0) {
-              // Replace remaining parsed steps and re-run from current position
-              const newSteps = recovery.revisedSteps
-              parsedSteps = [...parsedSteps.slice(0, i), ...newSteps]
-              // Adjust tc.steps length to match if needed
-              const revised = parsedSteps[i]
+              const revised = recovery.revisedSteps[0]
+              parsedStepsCache[i] = revised
               try {
-                const newLocator = revised.action === 'fill' || revised.action === 'click'
-                  ? findBestLocator(revised.target, pages)
-                  : null
-                await executeAction(page, revised, newLocator, baseUrl)
+                await executeAction(page, revised, pages, baseUrl)
                 stepError = null
-                onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: newLocator || undefined, healingAttempts })
+                onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: revised.locator || undefined, healingAttempts })
                 completedSteps.push({ step, status: 'passed' })
                 continue
               } catch (retryErr) {
                 stepError = retryErr instanceof Error ? retryErr : new Error(String(retryErr))
               }
             }
-            // skip or failed recovery
+
             const reason = recovery.reason || stepError.message
             onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'failed', locatorUsed: usedLocator, error: reason, healingAttempts })
             completedSteps.push({ step, status: 'failed' })

@@ -86,20 +86,19 @@ export default function ManualTCPage() {
     if (testCases.length === 0) { toast.error('No test cases to save'); return }
     setSaving(true)
     try {
-      const markdown = testCases
-        .map((tc) =>
-          `**${tc.id}: ${tc.title}** (${tc.type} | ${tc.priority} priority)\n\nSteps:\n${tc.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nExpected: ${tc.expectedResult}`
-        )
-        .join('\n\n---\n\n')
+      // Flatten all test case steps into a single step table saved to Jira description
+      const steps = testCases.flatMap((tc) =>
+        tc.steps.map((s) => ({ step: s, expected: tc.expectedResult }))
+      )
 
-      const res = await fetch(`/api/jira/issues/${issueKey.trim().toUpperCase()}/comment`, {
-        method: 'POST',
+      const res = await fetch(`/api/jira/issues/${issueKey.trim().toUpperCase()}/test-steps`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: `[QA-TESTCASES]\n${markdown}` }),
+        body: JSON.stringify({ steps }),
       })
       if (res.ok) {
-        toast.success('Test cases saved! Redirecting to automation...')
-        setTimeout(() => router.push(`/apps/${appId}/automation?issueKey=${issueKey.trim().toUpperCase()}`), 800)
+        toast.success('Test steps saved to Jira!')
+        setTimeout(() => router.push(`/apps/${appId}/work-items`), 800)
       } else {
         toast.error('Failed to save to Jira')
       }
@@ -383,16 +382,25 @@ export default function ManualTCPage() {
             </p>
           )}
 
-          {/* Jira format preview */}
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-1">
+          {/* Jira table preview */}
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-2">
             <p className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide flex items-center gap-1.5">
-              <FileText className="w-3.5 h-3.5" /> Jira comment preview
+              <FileText className="w-3.5 h-3.5" /> Jira test step table preview
             </p>
-            <pre className="text-xs text-slate-600 whitespace-pre-wrap font-mono leading-relaxed max-h-48 overflow-y-auto">
-{`[QA-TESTCASES]\n` + testCases.map((tc) =>
-  `**${tc.id}: ${tc.title}** (${tc.type} | ${tc.priority} priority)\n\nSteps:\n${tc.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nExpected: ${tc.expectedResult}`
-).join('\n\n---\n\n')}
-            </pre>
+            <div className="rounded border border-slate-200 overflow-hidden text-xs">
+              <div className="grid grid-cols-[32px_1fr_1fr] bg-slate-200">
+                <div className="px-2 py-1.5 text-center font-semibold text-slate-600">#</div>
+                <div className="px-3 py-1.5 font-semibold text-slate-600 border-l border-slate-300">Test Step</div>
+                <div className="px-3 py-1.5 font-semibold text-slate-600 border-l border-slate-300">Expected Result</div>
+              </div>
+              {testCases.flatMap((tc) => tc.steps.map((s, si) => ({ step: s, expected: tc.expectedResult, idx: si }))).map((row, i) => (
+                <div key={i} className="grid grid-cols-[32px_1fr_1fr] border-t border-slate-200 bg-white">
+                  <div className="px-2 py-1.5 text-center text-slate-400 font-mono">{i + 1}</div>
+                  <div className="px-3 py-1.5 text-slate-700 border-l border-slate-100">{row.step}</div>
+                  <div className="px-3 py-1.5 text-slate-600 border-l border-slate-100">{row.expected}</div>
+                </div>
+              ))}
+            </div>
           </div>
 
           <p className="text-xs text-slate-400">Edit the test cases below before saving:</p>

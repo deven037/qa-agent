@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { auth } from '@/auth'
 import { readApps } from '@/lib/config/store'
-import { fetchJiraIssue, findExistingTestCases, postJiraComment, parseTestCasesFromMarkdown } from '@/lib/jira/client'
+import { fetchJiraIssue, postJiraComment } from '@/lib/jira/client'
 import { TestCase } from '@/lib/agents/testcase-agent'
 import { inferRelevantPages } from '@/lib/knowledge/retriever'
 import { playwrightMcpAgent, AgentEvent, ExecutionResult } from '@/lib/agents/playwright-mcp-agent'
@@ -24,29 +24,34 @@ export async function POST(req: NextRequest) {
       const log = (text: string) => sendEvent({ type: 'log', text })
 
       try {
-        // Load test cases from Jira
-        log(`Loading test cases for ${issueKey}…`)
+        log(`Loading test steps for ${issueKey}…`)
         const issue = await fetchJiraIssue(issueKey)
-        const markdown = findExistingTestCases(issue.comments)
+        const testSteps = issue.testSteps ?? []
 
-        if (!markdown) {
-          controller.enqueue(encoder.encode(`data: [ERROR] No test cases found for ${issueKey}. Generate test cases first.\n\n`))
+        if (testSteps.length === 0) {
+          controller.enqueue(encoder.encode(`data: [ERROR] No test steps found for ${issueKey}. Add test steps in the Work Items drawer first.\n\n`))
           controller.close()
           return
         }
 
-        const testCases = parseTestCasesFromMarkdown(markdown)
-        log(`Found ${testCases.length} test case(s). Loading app knowledge…`)
+        const testCases: TestCase[] = [{
+          id: issue.key,
+          title: issue.summary,
+          type: 'positive',
+          priority: 'high',
+          steps: testSteps.map(s => s.step),
+          stepExpected: testSteps.map(s => s.expected),
+          expectedResult: testSteps.at(-1)?.expected ?? '',
+        }]
 
-        // Load RAG pages
-        const scenarioText = `${issue.summary} ${testCases.map((tc) => tc.title).join(' ')}`
+        log(`Found ${testSteps.length} test step(s). Loading app knowledge…`)
+
+        const scenarioText = `${issue.summary} ${testSteps.map(s => s.step).join(' ')}`
         const relevantPages = await inferRelevantPages(appId, scenarioText, 6)
         log(`Loaded ${relevantPages.length} page(s) from knowledge base. Starting execution…`)
 
-        // Run agent-driven execution
         const result = await playwrightMcpAgent(testCases, app, relevantPages, sendEvent, { browser, instructions, headed })
 
-        // Post results to Jira
         try {
           await postJiraComment(issueKey, buildJiraResults(issueKey, result))
           log('Results posted to Jira.')

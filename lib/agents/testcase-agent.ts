@@ -8,6 +8,7 @@ export interface TestCase {
   type: 'positive' | 'negative' | 'edge'
   priority: 'high' | 'medium' | 'low'
   steps: string[]
+  stepExpected?: string[]
   expectedResult: string
 }
 

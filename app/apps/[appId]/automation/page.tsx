@@ -31,9 +31,15 @@ interface TCLiveResult {
   analyzeReason?: string
 }
 
+interface TestStep {
+  step: string
+  expected: string
+}
+
 interface FullIssue {
   key: string
   summary: string
+  testSteps?: TestStep[]
   comments?: { id: string; body: string; author: string }[]
 }
 
@@ -98,11 +104,6 @@ export default function AutomationPage() {
       else toast.error('Issue not found')
     } catch { toast.error('Failed to fetch issue') }
     finally { setFetchingIssue(false) }
-  }
-
-  function getTestCasesMarkdown(): string | null {
-    const comment = issue?.comments?.find((c) => c.body.startsWith('[QA-TESTCASES]'))
-    return comment ? comment.body.replace('[QA-TESTCASES]\n', '') : null
   }
 
   function toggleTC(id: string) {
@@ -241,7 +242,7 @@ export default function AutomationPage() {
     }
   }
 
-  const testCasesMarkdown = getTestCasesMarkdown()
+  const hasSteps = (issue?.testSteps?.length ?? 0) > 0
 
   return (
     <div className="space-y-5">
@@ -290,16 +291,33 @@ export default function AutomationPage() {
                 <Badge variant="outline" className="font-mono text-xs border-violet-300 text-violet-700">{issue.key}</Badge>
                 <span className="text-sm font-semibold text-slate-800">{issue.summary}</span>
               </div>
-              {testCasesMarkdown ? (
+              {hasSteps ? (
                 <div>
-                  <p className="text-xs font-medium text-slate-500 mb-2">Test Cases found in Jira:</p>
-                  <pre className="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg p-3 overflow-auto max-h-40 whitespace-pre-wrap">
-                    {testCasesMarkdown}
-                  </pre>
+                  <p className="text-xs font-medium text-slate-500 mb-2">{issue.testSteps!.length} test step{issue.testSteps!.length !== 1 ? 's' : ''} loaded from Jira:</p>
+                  <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50">
+                          <th className="px-3 py-2 text-left font-semibold text-slate-500 w-8">#</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-500">Test Step</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-500">Expected Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {issue.testSteps!.map((s, i) => (
+                          <tr key={i} className="border-b border-slate-100 last:border-0">
+                            <td className="px-3 py-2 text-slate-400 font-mono">{i + 1}</td>
+                            <td className="px-3 py-2 text-slate-700">{s.step}</td>
+                            <td className="px-3 py-2 text-slate-500">{s.expected || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : (
                 <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  ⚠️ No test cases found. <a href={`/apps/${appId}/manual-tc?issueKey=${issue.key}`} className="underline">Generate them first →</a>
+                  ⚠️ No test steps found. <a href={`/apps/${appId}/work-items`} className="underline">Add them in Work Items →</a>
                 </p>
               )}
             </div>
@@ -316,7 +334,7 @@ export default function AutomationPage() {
         <div className="p-5 space-y-5">
 
           {/* Settings — shown when test cases exist */}
-          {issue && testCasesMarkdown && (
+          {issue && hasSteps && (
             <div className="border border-emerald-100 bg-emerald-50 rounded-xl p-4 space-y-4">
               <p className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">Execution Settings</p>
 
@@ -379,7 +397,7 @@ export default function AutomationPage() {
           <div className="flex items-center gap-3">
             <Button
               onClick={handleExecute}
-              disabled={!issue || !testCasesMarkdown || isExecuting}
+              disabled={!issue || !hasSteps || isExecuting}
               className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
             >
               {isExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
