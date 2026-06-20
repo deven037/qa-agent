@@ -1,3 +1,10 @@
+export interface JiraChild {
+  key: string
+  summary: string
+  issueType: string
+  status: string
+}
+
 export interface JiraIssue {
   key: string
   summary: string
@@ -9,6 +16,9 @@ export interface JiraIssue {
   description: string
   acceptanceCriteria: string
   comments: JiraComment[]
+  children: JiraChild[]
+  parentKey?: string
+  parentSummary?: string
 }
 
 export interface JiraComment {
@@ -87,6 +97,22 @@ export async function fetchJiraIssue(issueKey: string): Promise<JiraIssue> {
   const acField = data.fields['customfield_10016'] ?? data.fields['acceptance_criteria'] ?? ''
   const acceptanceCriteria = typeof acField === 'string' ? acField : adfToText(acField)
 
+  // Fetch child issues (stories under epic, test cases under story, etc.)
+  const childRes = await fetch(
+    `${getBaseUrl()}/rest/api/3/search/jql?jql=parent=${issueKey}&fields=summary,issuetype,status&maxResults=20`,
+    { headers: { Authorization: getAuthHeader(), Accept: 'application/json' } }
+  )
+  const childData = await childRes.json()
+  const children: JiraChild[] = (childData.issues ?? []).map(
+    (c: { key: string; fields: { summary: string; issuetype?: { name: string }; status?: { name: string } } }) => ({
+      key: c.key,
+      summary: c.fields.summary ?? '',
+      issueType: c.fields.issuetype?.name ?? '',
+      status: c.fields.status?.name ?? '',
+    })
+  )
+
+  const parentField = data.fields.parent
   return {
     key: issueKey,
     summary: data.fields.summary ?? '',
@@ -98,6 +124,9 @@ export async function fetchJiraIssue(issueKey: string): Promise<JiraIssue> {
     description,
     acceptanceCriteria,
     comments,
+    children,
+    parentKey: parentField?.key,
+    parentSummary: parentField?.fields?.summary,
   }
 }
 

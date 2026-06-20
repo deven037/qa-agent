@@ -13,6 +13,8 @@ import { toast } from 'sonner'
 
 interface SearchResult { key: string; summary: string }
 
+interface IssueChild { key: string; summary: string; issueType: string; status: string }
+
 interface FullIssue {
   key: string
   summary: string
@@ -24,6 +26,9 @@ interface FullIssue {
   description?: string
   acceptanceCriteria?: string
   comments?: { id: string; body: string; author: string }[]
+  children?: IssueChild[]
+  parentKey?: string
+  parentSummary?: string
 }
 
 // Color + icon config per issue type
@@ -103,13 +108,14 @@ function DrawerSection({ icon: Icon, label, children }: { icon: React.ElementTyp
 // ── Issue Detail Drawer ──────────────────────────────────────────────────────
 
 function IssueDrawer({
-  issue, onClose, appId, router, onCreateChild,
+  issue, onClose, appId, router, onCreateChild, openIssueFromDrawer,
 }: {
   issue: FullIssue
   onClose: () => void
   appId: string
   router: ReturnType<typeof useRouter>
   onCreateChild?: (type: string, parentKey?: string) => void
+  openIssueFromDrawer?: (key: string) => void
 }) {
   const jiraBase = process.env.NEXT_PUBLIC_JIRA_BASE_URL ?? ''
   const type = issue.issueType
@@ -220,6 +226,19 @@ function IssueDrawer({
           </button>
         </div>
 
+        {/* Parent breadcrumb */}
+        {issue.parentKey && (
+          <div className="px-5 py-2 bg-slate-50 border-b border-slate-100 flex items-center gap-1.5 text-xs text-slate-500">
+            <Layers className="w-3 h-3 text-orange-400 shrink-0" />
+            <span>Under</span>
+            <button onClick={() => { onClose(); setTimeout(() => openIssueFromDrawer?.(issue.parentKey!), 50) }}
+              className="font-mono text-orange-600 hover:underline font-medium">
+              {issue.parentKey}
+            </button>
+            {issue.parentSummary && <span className="truncate text-slate-400">— {issue.parentSummary}</span>}
+          </div>
+        )}
+
         {/* Meta row */}
         <DrawerMeta issue={issue} />
 
@@ -233,6 +252,20 @@ function IssueDrawer({
           {type === 'Epic' && issue.description && (
             <DrawerSection icon={FileText} label="Feature Description">
               <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{issue.description}</p>
+            </DrawerSection>
+          )}
+          {type === 'Epic' && issue.children && issue.children.length > 0 && (
+            <DrawerSection icon={BookOpen} label={`Child Stories (${issue.children.length})`}>
+              <div className="space-y-1.5">
+                {issue.children.map((c) => (
+                  <button key={c.key} onClick={() => openIssueFromDrawer?.(c.key)}
+                    className="w-full text-left flex items-center gap-2 px-3 py-2 bg-violet-50 border border-violet-100 rounded-lg hover:border-violet-300 transition-all">
+                    <Badge variant="outline" className="font-mono text-xs shrink-0 bg-violet-100 text-violet-700 border-violet-200">{c.key}</Badge>
+                    <span className="text-sm text-slate-700 truncate">{c.summary}</span>
+                    <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_COLOR[c.status] ?? 'bg-slate-100 text-slate-500'}`}>{c.status}</span>
+                  </button>
+                ))}
+              </div>
             </DrawerSection>
           )}
           {type === 'Epic' && (
@@ -252,6 +285,20 @@ function IssueDrawer({
           {type === 'Story' && issue.acceptanceCriteria && (
             <DrawerSection icon={CheckSquare} label="Acceptance Criteria">
               <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{issue.acceptanceCriteria}</p>
+            </DrawerSection>
+          )}
+          {type === 'Story' && issue.children && issue.children.length > 0 && (
+            <DrawerSection icon={FlaskConical} label={`Linked Test Cases (${issue.children.length})`}>
+              <div className="space-y-1.5">
+                {issue.children.map((c) => (
+                  <button key={c.key} onClick={() => openIssueFromDrawer?.(c.key)}
+                    className="w-full text-left flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-100 rounded-lg hover:border-emerald-300 transition-all">
+                    <Badge variant="outline" className="font-mono text-xs shrink-0 bg-emerald-100 text-emerald-700 border-emerald-200">{c.key}</Badge>
+                    <span className="text-sm text-slate-700 truncate">{c.summary}</span>
+                    <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_COLOR[c.status] ?? 'bg-slate-100 text-slate-500'}`}>{c.status}</span>
+                  </button>
+                ))}
+              </div>
             </DrawerSection>
           )}
 
@@ -763,6 +810,7 @@ export default function WorkItemsPage() {
             onClose={() => setSelectedIssue(null)}
             appId={appId}
             router={router}
+            openIssueFromDrawer={(key) => { setSelectedIssue(null); setTimeout(() => openIssue(key), 50) }}
             onCreateChild={(type, parentKey) => {
               setSelectedIssue(null)
               setCreateDefaultType(type)
