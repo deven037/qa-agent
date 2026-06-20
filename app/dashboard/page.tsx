@@ -10,7 +10,7 @@ import { ExternalLink, LayoutDashboard, LogOut } from 'lucide-react'
 export default async function DashboardPage() {
   const session = await auth()
   if (!session) redirect('/login')
-  const apps = readApps()
+  const apps = await readApps()
 
   const userName = session.user?.name ?? session.user?.email ?? 'User'
   const initials = userName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()

@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
   const { issueKey, appId, headed = false, browser = 'chromium', instructions = '' } = await req.json()
   if (!issueKey || !appId) return new Response('issueKey and appId required', { status: 400 })
 
-  const app = readApps().find((a) => a.id === appId)
+  const app = (await readApps()).find((a) => a.id === appId)
   if (!app) return new Response('App not found', { status: 404 })
 
   const stream = new ReadableStream({

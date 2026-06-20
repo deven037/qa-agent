@@ -1,7 +1,6 @@
-import fs from 'fs'
-import path from 'path'
-
-const CONFIG_DIR = path.join(process.cwd(), 'config')
+import dbConnect from '@/lib/db/mongoose'
+import { AppModel } from '@/lib/db/models/App'
+import { JiraConfigModel } from '@/lib/db/models/JiraConfig'
 
 export interface JiraConfig {
   baseUrl: string
@@ -16,39 +15,82 @@ export interface AppConfig {
   jiraProjectKey: string
   baseUrl: string
   authStrategy: 'no-auth' | 'email-password' | 'api-key' | 'custom'
-  credentials: Record<string, string>      // actual values: { email, password, apiKey }
-  credentialEnvVars: Record<string, string> // legacy — kept for compat, prefer credentials
-  storePassword?: string                   // storefront/app-level password gate (e.g. Shopify preview stores)
+  credentials: Record<string, string>
+  credentialEnvVars: Record<string, string>
+  storePassword?: string
   playwrightTestsDir: string
   createdAt: string
 }
 
-function ensureConfigDir() {
-  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true })
+function docToJiraConfig(doc: any): JiraConfig {
+  return {
+    baseUrl: doc.baseUrl,
+    email: doc.email,
+    apiToken: doc.apiToken,
+    defaultProjectKey: doc.defaultProjectKey,
+  }
 }
 
-export function readJiraConfig(): JiraConfig | null {
-  const file = path.join(CONFIG_DIR, 'jira-config.json')
-  if (!fs.existsSync(file)) return null
-  return JSON.parse(fs.readFileSync(file, 'utf-8'))
+function docToAppConfig(doc: any): AppConfig {
+  return {
+    id: doc.id,
+    name: doc.name,
+    jiraProjectKey: doc.jiraProjectKey,
+    baseUrl: doc.baseUrl,
+    authStrategy: doc.authStrategy,
+    credentials: doc.credentials instanceof Map
+      ? Object.fromEntries(doc.credentials)
+      : (doc.credentials ?? {}),
+    credentialEnvVars: doc.credentialEnvVars instanceof Map
+      ? Object.fromEntries(doc.credentialEnvVars)
+      : (doc.credentialEnvVars ?? {}),
+    storePassword: doc.storePassword,
+    playwrightTestsDir: doc.playwrightTestsDir,
+    createdAt: doc.createdAt,
+  }
 }
 
-export function writeJiraConfig(config: JiraConfig) {
-  ensureConfigDir()
-  fs.writeFileSync(path.join(CONFIG_DIR, 'jira-config.json'), JSON.stringify(config, null, 2))
+export async function readJiraConfig(): Promise<JiraConfig | null> {
+  await dbConnect
+  const doc = await JiraConfigModel.findOne().lean()
+  if (!doc) return null
+  return docToJiraConfig(doc)
 }
 
-export function readApps(): AppConfig[] {
-  const file = path.join(CONFIG_DIR, 'apps.json')
-  if (!fs.existsSync(file)) return []
-  return JSON.parse(fs.readFileSync(file, 'utf-8'))
+export async function writeJiraConfig(config: JiraConfig): Promise<void> {
+  await dbConnect
+  await JiraConfigModel.findOneAndUpdate({}, config, { upsert: true, new: true })
 }
 
-export function writeApps(apps: AppConfig[]) {
-  ensureConfigDir()
-  fs.writeFileSync(path.join(CONFIG_DIR, 'apps.json'), JSON.stringify(apps, null, 2))
+export async function readApps(): Promise<AppConfig[]> {
+  await dbConnect
+  const docs = await AppModel.find().lean()
+  return docs.map(docToAppConfig)
 }
 
-export function isConfigured(): boolean {
-  return readJiraConfig() !== null && readApps().length > 0
+export async function writeApps(apps: AppConfig[]): Promise<void> {
+  await dbConnect
+  await AppModel.deleteMany({})
+  if (apps.length > 0) await AppModel.insertMany(apps)
+}
+
+export async function readApp(id: string): Promise<AppConfig | null> {
+  await dbConnect
+  const doc = await AppModel.findOne({ id }).lean()
+  if (!doc) return null
+  return docToAppConfig(doc)
+}
+
+export async function upsertApp(app: AppConfig): Promise<void> {
+  await dbConnect
+  await AppModel.findOneAndUpdate({ id: app.id }, app, { upsert: true, new: true })
+}
+
+export async function isConfigured(): Promise<boolean> {
+  await dbConnect
+  const [jira, appCount] = await Promise.all([
+    JiraConfigModel.findOne().lean(),
+    AppModel.countDocuments(),
+  ])
+  return jira !== null && appCount > 0
 }

@@ -9,8 +9,7 @@ export async function POST(req: NextRequest) {
 
   const { app } = await req.json()
 
-  // Save Jira config from env vars (no user entry needed)
-  writeJiraConfig({
+  await writeJiraConfig({
     baseUrl: process.env.JIRA_BASE_URL ?? '',
     email: process.env.JIRA_ADMIN_EMAIL ?? '',
     apiToken: process.env.JIRA_API_TOKEN ?? '',
@@ -29,8 +28,8 @@ export async function POST(req: NextRequest) {
     createdAt: new Date().toISOString(),
   }
 
-  const apps = readApps()
-  writeApps([...apps, newApp])
+  const apps = await readApps()
+  await writeApps([...apps, newApp])
 
   return NextResponse.json({ ok: true, appId: newApp.id })
 }

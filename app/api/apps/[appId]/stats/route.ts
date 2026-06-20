@@ -13,7 +13,7 @@ export async function GET(
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { appId } = await params
-  const app = readApps().find((a) => a.id === appId)
+  const app = (await readApps()).find((a) => a.id === appId)
   if (!app) return NextResponse.json({ error: 'App not found' }, { status: 404 })
 
   try {

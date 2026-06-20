@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   const { issueKey, appId, issueType } = await req.json()
   if (!issueKey || !appId) return new Response('issueKey and appId are required', { status: 400 })
 
-  const apps = readApps()
+  const apps = await readApps()
   const appConfig = apps.find((a) => a.id === appId)
   if (!appConfig) return new Response('App not found', { status: 404 })
 

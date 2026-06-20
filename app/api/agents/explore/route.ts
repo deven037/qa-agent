@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   if (!session) return new Response('Unauthorized', { status: 401 })
 
   const { appId, issueKey, prompt: customPrompt } = await req.json()
-  const app = readApps().find((a) => a.id === appId)
+  const app = (await readApps()).find((a) => a.id === appId)
   if (!app) return new Response('App not found', { status: 404 })
 
   // Build scenario string from Jira issue or custom prompt
