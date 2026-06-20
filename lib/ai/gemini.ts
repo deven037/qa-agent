@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import Groq from 'groq-sdk'
+import OpenAI from 'openai'
 import { JiraIssueFields } from '@/lib/jira/client'
 
 // ─── Key pools (read all numbered keys from env) ──────────────────────────────
@@ -15,11 +16,14 @@ function readKeys(prefix: string): string[] {
 
 const GEMINI_KEYS = readKeys('GEMINI_API_KEY')
 const GROQ_KEYS = readKeys('GROQ_API_KEY')
+const OPENROUTER_KEYS = readKeys('OPENROUTER_API_KEY')
+const TOGETHER_KEYS = readKeys('TOGETHER_API_KEY')
+const CEREBRAS_KEYS = readKeys('CEREBRAS_API_KEY')
 
 // ─── Attempt matrix: every key × every model for each provider ────────────────
 
 interface Attempt {
-  provider: 'gemini' | 'groq'
+  provider: 'gemini' | 'groq' | 'openrouter' | 'together' | 'cerebras'
   key: string
   model: string
   label: string
@@ -45,21 +49,59 @@ const GROQ_MODELS = [
   'deepseek-r1-distill-llama-70b',
   'compound-beta',
 ]
+const OPENROUTER_MODELS = [
+  'meta-llama/llama-3.3-70b-instruct',
+  'meta-llama/llama-3.1-70b-instruct',
+  'mistralai/mistral-small-3.1-24b-instruct',
+  'mistralai/mistral-nemo',
+  'google/gemma-3-27b-it',
+  'qwen/qwen-2.5-72b-instruct',
+  'deepseek/deepseek-r1-distill-llama-70b',
+  'nousresearch/hermes-3-llama-3.1-70b',
+]
+const TOGETHER_MODELS = [
+  'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  'meta-llama/Llama-3.1-70B-Instruct-Turbo',
+  'meta-llama/Llama-3.1-8B-Instruct-Turbo',
+  'Qwen/Qwen2.5-72B-Instruct-Turbo',
+  'mistralai/Mixtral-8x22B-Instruct-v0.1',
+  'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+  'google/gemma-2-27b-it',
+]
+const CEREBRAS_MODELS = [
+  'llama-3.3-70b',
+  'llama-3.1-70b',
+  'llama-3.1-8b',
+  'llama3.1-70b',
+  'llama3.1-8b',
+]
 
 function buildAttempts(): Attempt[] {
   const attempts: Attempt[] = []
 
-  // For each Gemini model, try all Gemini keys before moving to next model
   for (const model of GEMINI_MODELS) {
     for (let i = 0; i < GEMINI_KEYS.length; i++) {
       attempts.push({ provider: 'gemini', key: GEMINI_KEYS[i], model, label: `Gemini key${i + 1}/${model}` })
     }
   }
-
-  // Then Groq: for each model, try all Groq keys
   for (const model of GROQ_MODELS) {
     for (let i = 0; i < GROQ_KEYS.length; i++) {
       attempts.push({ provider: 'groq', key: GROQ_KEYS[i], model, label: `Groq key${i + 1}/${model}` })
+    }
+  }
+  for (const model of OPENROUTER_MODELS) {
+    for (let i = 0; i < OPENROUTER_KEYS.length; i++) {
+      attempts.push({ provider: 'openrouter', key: OPENROUTER_KEYS[i], model, label: `OpenRouter key${i + 1}/${model}` })
+    }
+  }
+  for (const model of TOGETHER_MODELS) {
+    for (let i = 0; i < TOGETHER_KEYS.length; i++) {
+      attempts.push({ provider: 'together', key: TOGETHER_KEYS[i], model, label: `Together key${i + 1}/${model}` })
+    }
+  }
+  for (const model of CEREBRAS_MODELS) {
+    for (let i = 0; i < CEREBRAS_KEYS.length; i++) {
+      attempts.push({ provider: 'cerebras', key: CEREBRAS_KEYS[i], model, label: `Cerebras key${i + 1}/${model}` })
     }
   }
 
@@ -104,9 +146,32 @@ export async function streamGemini(
         }
         console.log(`[AI] Streamed via ${attempt.label}`)
         return fullText
-      } else {
+      } else if (attempt.provider === 'groq') {
         const groq = new Groq({ apiKey: attempt.key })
         const stream = await groq.chat.completions.create({
+          model: attempt.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+          stream: true,
+        })
+        let fullText = ''
+        for await (const chunk of stream) {
+          const text = chunk.choices[0]?.delta?.content ?? ''
+          fullText += text
+          onChunk(text)
+        }
+        console.log(`[AI] Streamed via ${attempt.label}`)
+        return fullText
+      } else {
+        // OpenAI-compatible: OpenRouter, Together AI, Cerebras
+        const baseURL =
+          attempt.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' :
+          attempt.provider === 'together'    ? 'https://api.together.xyz/v1' :
+                                               'https://api.cerebras.ai/v1'
+        const client = new OpenAI({ apiKey: attempt.key, baseURL })
+        const stream = await client.chat.completions.create({
           model: attempt.model,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -149,9 +214,20 @@ export async function callLLM(prompt: string, systemPrompt: string): Promise<str
         const m = client.getGenerativeModel({ model: attempt.model, systemInstruction: systemPrompt })
         const result = await m.generateContent(prompt)
         text = result.response.text()
-      } else {
+      } else if (attempt.provider === 'groq') {
         const groq = new Groq({ apiKey: attempt.key })
         const result = await groq.chat.completions.create({
+          model: attempt.model,
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+        })
+        text = result.choices[0]?.message?.content ?? ''
+      } else {
+        const baseURL =
+          attempt.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' :
+          attempt.provider === 'together'    ? 'https://api.together.xyz/v1' :
+                                               'https://api.cerebras.ai/v1'
+        const client = new OpenAI({ apiKey: attempt.key, baseURL })
+        const result = await client.chat.completions.create({
           model: attempt.model,
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
         })
@@ -231,7 +307,7 @@ Respond ONLY with a valid JSON object matching the fields described. Include "is
         const m = client.getGenerativeModel({ model: attempt.model, systemInstruction: systemPrompt })
         const result = await m.generateContent(userPrompt)
         text = result.response.text()
-      } else {
+      } else if (attempt.provider === 'groq') {
         const groq = new Groq({ apiKey: attempt.key })
         const result = await groq.chat.completions.create({
           model: attempt.model,
@@ -240,6 +316,20 @@ Respond ONLY with a valid JSON object matching the fields described. Include "is
             { role: 'user', content: userPrompt },
           ],
           response_format: { type: 'json_object' },
+        })
+        text = result.choices[0]?.message?.content ?? ''
+      } else {
+        const baseURL =
+          attempt.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' :
+          attempt.provider === 'together'    ? 'https://api.together.xyz/v1' :
+                                               'https://api.cerebras.ai/v1'
+        const client = new OpenAI({ apiKey: attempt.key, baseURL })
+        const result = await client.chat.completions.create({
+          model: attempt.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
         })
         text = result.choices[0]?.message?.content ?? ''
       }
