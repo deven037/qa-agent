@@ -83,7 +83,7 @@ export default function AutomationPage() {
         const app = apps.find((a: { id: string }) => a.id === appId)
         const projectKey = app?.jiraProjectKey ?? ''
         if (!projectKey) return
-        const res = await fetch(`/api/jira/issues?project=${projectKey}&q=`)
+        const res = await fetch(`/api/jira/issues?project=${projectKey}&q=&type=Test+Case`)
         if (res.ok) setRecentIssues(await res.json())
       } catch { /* ignore */ }
     }

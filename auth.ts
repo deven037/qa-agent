@@ -14,13 +14,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Credentials({
       credentials: {
-        email: { label: 'Email', type: 'email' },
+        username: { label: 'Username', type: 'text' },
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null
+        if (!credentials?.username || !credentials?.password) return null
         await dbConnect
-        const user = await User.findOne({ email: String(credentials.email).toLowerCase() })
+        const input = String(credentials.username).trim()
+        const user = await User.findOne({ name: { $regex: `^${input}$`, $options: 'i' } })
         if (!user) throw new InvalidCredentials()
         const valid = await bcrypt.compare(String(credentials.password), user.passwordHash)
         if (!valid) throw new InvalidCredentials()

@@ -10,6 +10,7 @@ export interface TestCase {
   type: 'positive' | 'negative' | 'edge'
   priority: 'high' | 'medium' | 'low'
   steps: string[]
+  stepExpected?: string[]
   expectedResult: string
 }
 
@@ -43,13 +44,22 @@ export default function EditableTestCases({ testCases, onChange }: Props) {
     update(tcIdx, { steps })
   }
 
+  function updateStepExpected(tcIdx: number, stepIdx: number, value: string) {
+    const stepExpected = [...(testCases[tcIdx].stepExpected ?? testCases[tcIdx].steps.map(() => ''))]
+    stepExpected[stepIdx] = value
+    update(tcIdx, { stepExpected })
+  }
+
   function addStep(tcIdx: number) {
-    update(tcIdx, { steps: [...testCases[tcIdx].steps, ''] })
+    const steps = [...testCases[tcIdx].steps, '']
+    const stepExpected = [...(testCases[tcIdx].stepExpected ?? testCases[tcIdx].steps.map(() => '')), '']
+    update(tcIdx, { steps, stepExpected })
   }
 
   function removeStep(tcIdx: number, stepIdx: number) {
     const steps = testCases[tcIdx].steps.filter((_, i) => i !== stepIdx)
-    update(tcIdx, { steps })
+    const stepExpected = (testCases[tcIdx].stepExpected ?? []).filter((_, i) => i !== stepIdx)
+    update(tcIdx, { steps, stepExpected })
   }
 
   function toggleExpand(id: string) {
@@ -63,10 +73,7 @@ export default function EditableTestCases({ testCases, onChange }: Props) {
   return (
     <div className="space-y-3">
       {testCases.map((tc, tcIdx) => (
-        <div
-          key={tc.id}
-          className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm"
-        >
+        <div key={tc.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
           {/* Header */}
           <button
             onClick={() => toggleExpand(tc.id)}
@@ -94,22 +101,33 @@ export default function EditableTestCases({ testCases, onChange }: Props) {
                 />
               </div>
 
-              {/* Steps */}
+              {/* Steps with inline expected results */}
               <div>
-                <label className="text-xs font-medium text-slate-500 mb-1.5 block">Steps</label>
-                <div className="space-y-1.5">
+                <div className="grid grid-cols-[24px_1fr_1fr_20px] gap-x-2 mb-1.5">
+                  <div />
+                  <label className="text-xs font-medium text-slate-500">Steps</label>
+                  <label className="text-xs font-medium text-emerald-600">Expected Result</label>
+                  <div />
+                </div>
+                <div className="space-y-2">
                   {tc.steps.map((step, stepIdx) => (
-                    <div key={stepIdx} className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400 w-5 shrink-0 text-right">{stepIdx + 1}.</span>
+                    <div key={stepIdx} className="grid grid-cols-[24px_1fr_1fr_20px] gap-x-2 items-start">
+                      <span className="text-xs text-slate-400 pt-2 text-right">{stepIdx + 1}.</span>
                       <input
-                        className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+                        className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
                         value={step}
                         onChange={(e) => updateStep(tcIdx, stepIdx, e.target.value)}
-                        placeholder={`Step ${stepIdx + 1}...`}
+                        placeholder={`Step ${stepIdx + 1}…`}
+                      />
+                      <input
+                        className="border border-emerald-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-emerald-50/40 placeholder:text-slate-300"
+                        value={(tc.stepExpected ?? [])[stepIdx] ?? ''}
+                        onChange={(e) => updateStepExpected(tcIdx, stepIdx, e.target.value)}
+                        placeholder="Expected outcome…"
                       />
                       <button
                         onClick={() => removeStep(tcIdx, stepIdx)}
-                        className="text-slate-300 hover:text-red-400 transition-colors"
+                        className="text-slate-300 hover:text-red-400 transition-colors pt-2"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -117,16 +135,16 @@ export default function EditableTestCases({ testCases, onChange }: Props) {
                   ))}
                   <button
                     onClick={() => addStep(tcIdx)}
-                    className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-800 mt-1"
+                    className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-800 mt-1 col-start-2"
                   >
                     <Plus className="w-3.5 h-3.5" /> Add step
                   </button>
                 </div>
               </div>
 
-              {/* Expected Result */}
+              {/* Overall Expected Result */}
               <div>
-                <label className="text-xs font-medium text-slate-500 mb-1 block">Expected Result</label>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Overall Expected Result</label>
                 <textarea
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-violet-400"
                   rows={2}

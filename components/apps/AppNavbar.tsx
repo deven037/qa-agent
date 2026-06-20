@@ -23,13 +23,13 @@ export default function AppNavbar({ appId, appName, jiraProjectKey }: Props) {
   const base = `/apps/${appId}`
 
   return (
-    <nav className="bg-gradient-to-r from-violet-600 via-violet-700 to-indigo-700 shadow-lg">
+    <nav className="bg-gradient-to-r from-violet-600 via-violet-700 to-indigo-700 shadow-lg" style={{ fontFamily: 'var(--font-jakarta), sans-serif' }}>
       <div className="max-w-7xl mx-auto px-6">
         <div className="flex items-center justify-between h-16">
           {/* Left: app identity */}
           <div className="flex items-center gap-3 shrink-0">
-            <span className="text-white font-bold text-lg tracking-tight">{appName}</span>
-            <Badge className="bg-white/20 text-white border-white/30 text-xs font-mono hover:bg-white/30">
+            <span className="text-white font-bold text-base tracking-[-0.02em]">{appName}</span>
+            <Badge className="bg-white/15 text-white/90 border-white/20 text-xs font-mono font-normal hover:bg-white/25">
               {jiraProjectKey}
             </Badge>
           </div>
@@ -42,10 +42,10 @@ export default function AppNavbar({ appId, appName, jiraProjectKey }: Props) {
                 <Link
                   key={href}
                   href={`${base}/${href}`}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm tracking-[-0.01em] transition-all whitespace-nowrap ${
                     active
-                      ? 'bg-white/20 text-white shadow-sm'
-                      : 'text-white/70 hover:text-white hover:bg-white/10'
+                      ? 'bg-white text-violet-700 shadow-sm font-medium'
+                      : 'text-white/70 hover:text-white hover:bg-white/10 font-normal'
                   }`}
                 >
                   <Icon className="w-4 h-4 shrink-0" />
@@ -58,7 +58,7 @@ export default function AppNavbar({ appId, appName, jiraProjectKey }: Props) {
           {/* Right: back to main dashboard */}
           <Link
             href="/dashboard"
-            className="flex items-center gap-1.5 text-white/70 hover:text-white text-sm transition-colors shrink-0"
+            className="flex items-center gap-1.5 text-white/60 hover:text-white text-sm font-normal tracking-[-0.01em] transition-colors shrink-0"
           >
             <Home className="w-4 h-4" />
             <span className="hidden sm:inline">Apps</span>

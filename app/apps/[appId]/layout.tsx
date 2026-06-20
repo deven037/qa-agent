@@ -2,6 +2,7 @@ import { auth } from '@/auth'
 import { redirect, notFound } from 'next/navigation'
 import { readApps } from '@/lib/config/store'
 import AppNavbar from '@/components/apps/AppNavbar'
+import InactivityGuard from '@/components/apps/InactivityGuard'
 
 export default async function AppLayout({
   children,
@@ -19,6 +20,7 @@ export default async function AppLayout({
 
   return (
     <div className="min-h-screen bg-slate-50">
+      <InactivityGuard />
       <AppNavbar
         appId={app.id}
         appName={app.name}
