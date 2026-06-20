@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 export default function RegisterPage() {
   const router = useRouter()
   const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -23,7 +24,7 @@ export default function RegisterPage() {
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, username, email, password }),
     })
     const data = await res.json()
     setLoading(false)
@@ -45,12 +46,16 @@ export default function RegisterPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
-              <Input id="name" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+              <Label htmlFor="name">Full Name</Label>
+              <Input id="name" type="text" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Jane Smith" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              <Label htmlFor="username">Username</Label>
+              <Input id="username" type="text" value={username} onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s/g, '_'))} required placeholder="jane_smith" autoComplete="username" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email">Work Email</Label>
+              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="jane@company.com" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>

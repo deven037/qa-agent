@@ -26,7 +26,8 @@ Return a JSON array of test case objects. Each object must have:
 - type: "positive" | "negative" | "edge"
 - priority: "high" | "medium" | "low"
 - steps: array of natural-language action steps referencing real field names from the UI knowledge
-- expectedResult: what should happen when all steps pass
+- stepExpected: array of expected results, one per step (same length as steps) — what the user should observe after each individual step completes
+- expectedResult: overall expected result when all steps pass (one sentence summary)
 
 ## Rules
 1. Steps must be concrete actions: "Navigate to /account/register", "Fill 'Email' with 'test@example.com'", "Click 'Create Account'"
@@ -35,17 +36,18 @@ Return a JSON array of test case objects. Each object must have:
 4. For single-mode: generate exactly one test case with id "TC-001"
 5. For multi-mode: generate test cases covering all scenario types listed (positive, negative, edge)
 6. Each step should be independently executable — no ambiguous references like "the previous field"
+7. stepExpected must have exactly the same number of items as steps. For navigation/fill steps use brief observable outcomes (e.g. "Login page loads", "Email field is populated"). For assert/verify steps describe the assertion result.
 
 ## Examples
 
 Good step: "Fill 'Email Address' with 'user@example.com'"
-Bad step: "Enter the email" (too vague, no field name)
+Good stepExpected for that step: "Email field shows 'user@example.com'"
 
 Good step: "Click 'Sign In' button"
-Bad step: "Submit the form" (ambiguous, no label)
+Good stepExpected for that step: "User is redirected to the account dashboard"
 
-Good expected result: "User is redirected to /account and 'My Account' heading is visible"
-Bad expected result: "Login works" (not verifiable)
+Good step: "Verify URL contains /account"
+Good stepExpected for that step: "URL includes /account — login successful"
 
 ## Return
 A JSON array only. No markdown, no explanation. Start with `[` and end with `]`.

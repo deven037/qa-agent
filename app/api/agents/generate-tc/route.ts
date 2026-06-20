@@ -81,15 +81,15 @@ async function generateScenarios(
   requirements: Awaited<ReturnType<typeof requirementAgent>>,
   onChunk: (text: string) => void
 ): Promise<string> {
-  const prompt = `Based on these requirements, generate test scenarios:
+  const prompt = `Based on these requirements, write exactly ONE test scenario for the primary happy-path flow:
 ${JSON.stringify(requirements, null, 2)}
 
-Write clear test scenarios:
+Format:
 Scenario 1: [Title]
 - Given: [precondition]
 - When: [action]
 - Then: [expected outcome]
 
-Cover happy path, error cases, and edge cases.`
-  return streamGemini(prompt, 'You are a QA engineer writing BDD-style test scenarios.', onChunk)
+One scenario only. Do not add negative or edge cases.`
+  return streamGemini(prompt, 'You are a QA engineer writing a single BDD-style test scenario.', onChunk)
 }

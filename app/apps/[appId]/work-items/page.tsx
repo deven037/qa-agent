@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import {
   Search, Plus, FileText, CheckSquare, MessageSquare, ExternalLink,
   X, BookOpen, Bug, Layers, Zap, ClipboardList, Loader2, ChevronDown, ChevronUp,
-  GitBranch, FlaskConical, Wrench, AlertTriangle, Info, Save,
+  GitBranch, FlaskConical, Wrench, AlertTriangle, Info, Save, Link,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -610,14 +610,14 @@ function IssueDrawer({
     if (type === 'Bug') return (
       <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap gap-2">
         <Button size="sm"
-          onClick={() => nav(`/apps/${appId}/automation?issueKey=${issue.key}`)}
+          onClick={() => nav(`/apps/${appId}/manual-tc?issueKey=${issue.key}`)}
           className="bg-red-600 hover:bg-red-700 text-xs gap-1.5">
-          <Zap className="w-3.5 h-3.5" /> Generate Regression Automation
+          <FlaskConical className="w-3.5 h-3.5" /> Generate Manual TC
         </Button>
         <Button size="sm" variant="outline"
           onClick={() => nav(`/apps/${appId}/manual-tc?issueKey=${issue.key}`)}
           className="border-red-300 text-red-700 hover:bg-red-50 text-xs gap-1.5">
-          <FlaskConical className="w-3.5 h-3.5" /> Link Manual Test Case
+          <Link className="w-3.5 h-3.5" /> Link Test Case
         </Button>
         <a href={`${jiraBase}/browse/${issue.key}`} target="_blank" rel="noreferrer">
           <Button size="sm" variant="outline" className="text-xs gap-1.5">
@@ -713,6 +713,15 @@ function IssueDrawer({
             <DrawerSection icon={Info} label="What goes in an Epic">
               <p className="text-xs text-slate-500 leading-relaxed">
                 Epics represent large features or initiatives. Break them down into <strong>Stories</strong> that describe individual user-facing requirements. Stories are then linked to manual test cases.
+              </p>
+            </DrawerSection>
+          )}
+
+          {/* Story: what goes in */}
+          {type === 'Story' && (
+            <DrawerSection icon={Info} label="What goes in a Story">
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Include: <strong>User story</strong> ("As a… I want… So that…"), <strong>Acceptance criteria</strong>, and the <strong>scope</strong> of what's being tested. Link to manual test cases that verify the story is complete.
               </p>
             </DrawerSection>
           )}
@@ -814,7 +823,17 @@ function TypeContainer({
     <div className={`border rounded-xl overflow-hidden ${cfg.color}`}>
       {/* Header */}
       <div className={`${cfg.header} px-4 py-3 flex items-center justify-between`}>
-        <div className="flex items-center gap-2">
+        <div
+          className="flex items-center gap-2 cursor-help"
+          title={
+            type === 'Story' ? 'Stories describe individual user-facing requirements. Each story is tested with manual test cases and linked to an Epic.'
+            : type === 'Bug' ? 'Bugs track defects found during testing. Generate a manual test case or link one to verify the fix.'
+            : type === 'Epic' ? 'Epics group large features or initiatives. Break them down into Stories covering individual requirements.'
+            : type === 'Task' ? 'Tasks are units of work. Add test steps to automate or manually verify them.'
+            : type === 'Test Case' ? 'Test Cases define the steps and expected results to verify a feature or fix.'
+            : `${type} work items`
+          }
+        >
           <Icon className="w-4 h-4 text-white/80" />
           <span className="text-sm font-semibold text-white">
             {type === 'Story' ? 'Stories' : type === 'Bug' ? 'Bugs' : type === 'Epic' ? 'Epics' : `${type}s`}
@@ -847,9 +866,26 @@ function TypeContainer({
               <span className="text-xs text-slate-400">Loading…</span>
             </div>
           ) : issues.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-4">
-              No {type === 'Story' ? 'stories' : type === 'Bug' ? 'bugs' : type === 'Epic' ? 'epics' : `${type.toLowerCase()}s`} found
-            </p>
+            <div className="py-4 px-3 text-center space-y-1.5">
+              <p className="text-xs text-slate-400">
+                No {type === 'Story' ? 'stories' : type === 'Bug' ? 'bugs' : type === 'Epic' ? 'epics' : `${type.toLowerCase()}s`} found
+              </p>
+              {type === 'Story' && (
+                <p className="text-xs text-slate-400/70 leading-relaxed">
+                  Stories describe individual user-facing requirements. Each story is tested with manual test cases and linked to an Epic.
+                </p>
+              )}
+              {type === 'Bug' && (
+                <p className="text-xs text-slate-400/70 leading-relaxed">
+                  Bugs track defects found during testing. Link them to manual test cases to verify the fix.
+                </p>
+              )}
+              {type === 'Epic' && (
+                <p className="text-xs text-slate-400/70 leading-relaxed">
+                  Epics group large features or initiatives. Break them down into Stories that cover individual requirements.
+                </p>
+              )}
+            </div>
           ) : (
             <>
               {issues.slice(0, 5).map((issue) => (
@@ -861,7 +897,15 @@ function TypeContainer({
                   <Badge variant="outline" className={`font-mono text-xs shrink-0 ${cfg.badge}`}>
                     {issue.key}
                   </Badge>
-                  <span className="text-sm text-slate-700 truncate group-hover:text-slate-900">{issue.summary}</span>
+                  <span
+                    className="text-sm text-slate-700 truncate group-hover:text-slate-900"
+                    title={
+                      type === 'Story' ? 'Describes an individual user-facing requirement. Tested with manual test cases and linked to an Epic.'
+                      : type === 'Bug' ? 'A defect found during testing. Generate a manual test case or link one to verify the fix.'
+                      : type === 'Epic' ? 'A large feature or initiative. Break it down into Stories covering individual requirements.'
+                      : type === 'Task' ? 'A unit of work. Add test steps to automate or manually verify it.'
+                      : issue.summary}
+                  >{issue.summary}</span>
                   <ExternalLink className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-400 shrink-0 ml-auto" />
                 </button>
               ))}
