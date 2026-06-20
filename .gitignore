@@ -46,3 +46,4 @@ next-env.d.ts
 # Playwright output
 /playwright-report/
 .claude/
+test-results/

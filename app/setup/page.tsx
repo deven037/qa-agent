@@ -18,6 +18,7 @@ interface AppForm {
   appEmail: string
   appPassword: string
   apiKey: string
+  storePassword: string
 }
 
 const STEPS = ['Select Project', 'Add Application']
@@ -33,7 +34,7 @@ export default function SetupPage() {
   const [newProjectKey, setNewProjectKey] = useState('')
   const [creatingProject, setCreatingProject] = useState(false)
   const [app, setApp] = useState<AppForm>({
-    name: '', baseUrl: '', jiraProjectKey: '', authStrategy: 'no-auth', appEmail: '', appPassword: '', apiKey: '',
+    name: '', baseUrl: '', jiraProjectKey: '', authStrategy: 'no-auth', appEmail: '', appPassword: '', apiKey: '', storePassword: '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -75,18 +76,18 @@ export default function SetupPage() {
     setLoading(true)
     setError('')
     try {
-      const credentialEnvVars: Record<string, string> = {}
+      const credentials: Record<string, string> = {}
       if (app.authStrategy === 'email-password') {
-        credentialEnvVars.email = 'APP_EMAIL'
-        credentialEnvVars.password = 'APP_PASSWORD'
+        if (app.appEmail) credentials.email = app.appEmail
+        if (app.appPassword) credentials.password = app.appPassword
       } else if (app.authStrategy === 'api-key') {
-        credentialEnvVars.apiKey = 'APP_API_KEY'
+        if (app.apiKey) credentials.apiKey = app.apiKey
       }
 
       const res = await fetch('/api/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app: { ...app, credentialEnvVars } }),
+        body: JSON.stringify({ app: { ...app, credentials, credentialEnvVars: {}, storePassword: app.storePassword || undefined } }),
       })
       if (!res.ok) throw new Error('Setup failed')
       router.push('/dashboard')
@@ -210,6 +211,15 @@ export default function SetupPage() {
               <div className="space-y-2">
                 <Label>Base URL</Label>
                 <Input placeholder="https://staging.myapp.com" value={app.baseUrl} onChange={(e) => setApp({ ...app, baseUrl: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Store / App Password <span className="text-slate-400 font-normal text-xs">(optional — for password-protected stores like Shopify preview)</span></Label>
+                <Input
+                  type="password"
+                  placeholder="Leave blank if not required"
+                  value={app.storePassword}
+                  onChange={(e) => setApp({ ...app, storePassword: e.target.value })}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Authentication</Label>
