@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { Loader2, ArrowRight, Zap, FlaskConical, Bug, CheckCircle2 } from 'lucide-react'
-import { loginAction } from './actions'
+import { useRouter } from 'next/navigation'
 
 const PILLS = [
   { icon: Zap, label: 'AI automation' },
@@ -19,6 +19,7 @@ const inputCls = [
 ].join(' ')
 
 export default function LoginPage() {
+  const router = useRouter()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -28,10 +29,38 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     setError('')
-    const result = await loginAction(username, password)
-    // If result is returned, it means an error occurred (success throws a redirect)
-    if (result?.error) {
-      setError(result.error)
+
+    try {
+      // Fetch fresh CSRF token before every sign-in attempt to avoid MissingCSRF
+      await fetch('/api/auth/csrf')
+
+      // Use direct POST to NextAuth credentials endpoint
+      const csrfRes = await fetch('/api/auth/csrf')
+      const { csrfToken } = await csrfRes.json()
+
+      const res = await fetch('/api/auth/callback/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ username, password, csrfToken, redirect: 'false', callbackUrl: '/' }),
+      })
+
+      if (res.ok && res.url && !res.url.includes('error=')) {
+        router.push('/')
+        router.refresh()
+        return
+      }
+
+      // Check if redirect happened to error or login
+      const finalUrl = res.url || ''
+      if (finalUrl.includes('error=') || res.status >= 400) {
+        setError('Invalid username or password')
+      } else {
+        router.push('/')
+        router.refresh()
+      }
+    } catch {
+      setError('Something went wrong. Please try again.')
+    } finally {
       setLoading(false)
     }
   }
@@ -43,7 +72,6 @@ export default function LoginPage() {
     >
       <div className="relative z-10 w-full max-w-sm flex flex-col items-center">
 
-        {/* Logo */}
         <div
           className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5 border border-white/20"
           style={{ background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(16px)' }}
@@ -51,13 +79,11 @@ export default function LoginPage() {
           <span className="text-white font-black text-3xl">Q</span>
         </div>
 
-        {/* Brand + description */}
         <h1 className="text-white font-bold text-3xl tracking-tight mb-2">QA Agent</h1>
         <p className="text-white/50 text-sm text-center leading-relaxed mb-4 max-w-[280px]">
           Generate test cases with AI, automate Playwright runs, and sync bugs to Jira — all in one place.
         </p>
 
-        {/* Feature pills */}
         <div className="flex flex-wrap justify-center gap-2 mb-10">
           {PILLS.map(({ icon: Icon, label }) => (
             <div key={label}
@@ -71,7 +97,6 @@ export default function LoginPage() {
 
         <div className="w-full border-t border-white/10 mb-8" />
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="w-full space-y-3">
           <div className="space-y-1.5">
             <label htmlFor="username" className="text-white/70 text-[11px] font-semibold uppercase tracking-widest">
