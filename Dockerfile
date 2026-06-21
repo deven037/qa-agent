@@ -83,11 +83,16 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy lib/prompts (markdown files read at runtime)
 COPY --from=builder /app/lib/prompts ./lib/prompts
 
-# Copy playwright and its downloaded Chromium browser
+# Copy playwright and its downloaded Chromium browser to a fixed path
 COPY --from=deps /app/node_modules/playwright-core ./node_modules/playwright-core
 COPY --from=deps /app/node_modules/@playwright ./node_modules/@playwright
 COPY --from=deps /app/node_modules/playwright ./node_modules/playwright
-COPY --from=deps /root/.cache/ms-playwright /root/.cache/ms-playwright
+COPY --from=deps /root/.cache/ms-playwright /ms-playwright
+
+# Tell Playwright where to find browsers regardless of user home dir
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN chown -R nextjs:nodejs /ms-playwright
 
 USER nextjs
 
