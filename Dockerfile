@@ -69,6 +69,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy lib/prompts (markdown files read at runtime)
 COPY --from=builder /app/lib/prompts ./lib/prompts
 
+# playwright-core needs its full node_modules at runtime (browsers.json etc.)
+COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
+COPY --from=builder /app/node_modules/@playwright ./node_modules/@playwright
+
 USER nextjs
 
 EXPOSE 3000
