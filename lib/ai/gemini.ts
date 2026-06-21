@@ -206,7 +206,9 @@ const llmCache = new Map<string, string>()
 const LLM_CACHE_MAX = 500
 
 function getCacheKey(prompt: string, systemPrompt: string): string {
-  return `${systemPrompt.slice(0, 60)}||${prompt.slice(0, 200)}`
+  // Include tail of prompt — step text appears at the end, not the start.
+  // Without this, all fill steps on the same page get the same cache key.
+  return `${systemPrompt.slice(0, 60)}||${prompt.slice(0, 120)}||${prompt.slice(-180)}`
 }
 
 function cacheSet(key: string, value: string) {
@@ -214,6 +216,98 @@ function cacheSet(key: string, value: string) {
     llmCache.delete(llmCache.keys().next().value!)
   }
   llmCache.set(key, value)
+}
+
+// ─── Smart LLM: high-capability models first (for planning, analysis) ────────
+// Tries the most capable free/cheap models before falling back to the full pool.
+// Order: Claude 3.5 Sonnet → GPT-4o mini → Llama 3.3 70B (Groq) → full pool
+
+const SMART_OPENROUTER_MODELS = [
+  'anthropic/claude-3.5-sonnet',
+  'anthropic/claude-3-haiku',
+  'openai/gpt-4o-mini',
+  'meta-llama/llama-3.3-70b-instruct',
+  'qwen/qwen-2.5-72b-instruct',
+]
+
+const SMART_GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'qwen-qwq-32b',
+  'deepseek-r1-distill-llama-70b',
+]
+
+function buildSmartAttempts(): Attempt[] {
+  const attempts: Attempt[] = []
+  // OpenRouter first — has Claude and GPT-4o
+  for (const model of SMART_OPENROUTER_MODELS) {
+    for (let i = 0; i < OPENROUTER_KEYS.length; i++) {
+      attempts.push({ provider: 'openrouter', key: OPENROUTER_KEYS[i], model, label: `OpenRouter key${i + 1}/${model}` })
+    }
+  }
+  // Groq as fast fallback
+  for (const model of SMART_GROQ_MODELS) {
+    for (let i = 0; i < GROQ_KEYS.length; i++) {
+      attempts.push({ provider: 'groq', key: GROQ_KEYS[i], model, label: `Groq key${i + 1}/${model}` })
+    }
+  }
+  // Gemini as final fallback
+  for (const model of ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-2.5-flash-preview-04-17']) {
+    for (let i = 0; i < GEMINI_KEYS.length; i++) {
+      attempts.push({ provider: 'gemini', key: GEMINI_KEYS[i], model, label: `Gemini key${i + 1}/${model}` })
+    }
+  }
+  return attempts.length > 0 ? attempts : buildAttempts()
+}
+
+export async function callSmartLLM(prompt: string, systemPrompt: string): Promise<string> {
+  const cacheKey = `smart||${getCacheKey(prompt, systemPrompt)}`
+  if (llmCache.has(cacheKey)) {
+    console.log('[AI] callSmartLLM cache hit')
+    return llmCache.get(cacheKey)!
+  }
+
+  const attempts = buildSmartAttempts()
+
+  for (const attempt of attempts) {
+    try {
+      let text: string
+      if (attempt.provider === 'gemini') {
+        const client = new GoogleGenerativeAI(attempt.key)
+        const m = client.getGenerativeModel({ model: attempt.model, systemInstruction: systemPrompt })
+        const result = await m.generateContent(prompt)
+        text = result.response.text()
+      } else if (attempt.provider === 'groq') {
+        const groq = new Groq({ apiKey: attempt.key })
+        const result = await groq.chat.completions.create({
+          model: attempt.model,
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+        })
+        text = result.choices[0]?.message?.content ?? ''
+      } else {
+        const baseURL =
+          attempt.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' :
+          attempt.provider === 'together'    ? 'https://api.together.xyz/v1' :
+                                               'https://api.cerebras.ai/v1'
+        const client = new OpenAI({ apiKey: attempt.key, baseURL })
+        const result = await client.chat.completions.create({
+          model: attempt.model,
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+        })
+        text = result.choices[0]?.message?.content ?? ''
+      }
+      console.log(`[AI] callSmartLLM via ${attempt.label}`)
+      cacheSet(cacheKey, text)
+      return text
+    } catch (e) {
+      if (isSkippableError(e)) {
+        console.warn(`[AI] Smart: quota/rate on ${attempt.label}, trying next...`)
+        continue
+      }
+      throw e
+    }
+  }
+  // Final fallback to regular pool
+  return callLLM(prompt, systemPrompt)
 }
 
 // ─── Non-streaming single call (step parsing, healing) ───────────────────────

@@ -2,7 +2,7 @@ import {
   fetchJiraIssue,
   findExistingScenarios,
   findExistingTestCases,
-  fetchAutomationScript,
+
   postJiraComment,
   attachFileToJiraIssue,
   parseTestCasesFromMarkdown,
@@ -58,13 +58,7 @@ export async function runPipeline(
   const existingTestCasesMarkdown = findExistingTestCases(issue.comments)
   const existingScenarios = findExistingScenarios(issue.comments)
 
-  // Try to load existing automation script from Jira attachments
-  let existingScript: string | null = null
-  try {
-    existingScript = await fetchAutomationScript(issueKey)
-  } catch {
-    existingScript = null
-  }
+  const existingScript: string | null = null
 
   const hasTestCases = !!existingTestCasesMarkdown
   const hasAutomation = !!existingScript

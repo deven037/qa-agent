@@ -1,6 +1,8 @@
+import { randomBytes } from 'crypto'
 import dbConnect from '@/lib/db/mongoose'
 import { AppModel } from '@/lib/db/models/App'
 import { JiraConfigModel } from '@/lib/db/models/JiraConfig'
+import { RunnerConfigModel } from '@/lib/db/models/RunnerConfig'
 
 export interface JiraConfig {
   baseUrl: string
@@ -84,6 +86,23 @@ export async function readApp(id: string): Promise<AppConfig | null> {
 export async function upsertApp(app: AppConfig): Promise<void> {
   await dbConnect
   await AppModel.findOneAndUpdate({ id: app.id }, app, { upsert: true, new: true })
+}
+
+export async function readRunnerToken(): Promise<string> {
+  await dbConnect
+  const doc = await RunnerConfigModel.findOne().lean() as { token: string } | null
+  if (doc) return doc.token
+  // Generate on first access
+  const token = randomBytes(32).toString('hex')
+  await RunnerConfigModel.create({ token })
+  return token
+}
+
+export async function regenerateRunnerToken(): Promise<string> {
+  await dbConnect
+  const token = randomBytes(32).toString('hex')
+  await RunnerConfigModel.findOneAndUpdate({}, { token }, { upsert: true, new: true })
+  return token
 }
 
 export async function isConfigured(): Promise<boolean> {

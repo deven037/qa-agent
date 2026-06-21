@@ -32,7 +32,8 @@ Expected result: {{expected}}
 1. Read the ARIA snapshot and DOM Fields carefully. Use only what you actually see — never invent.
 2. Match the step to one action: `navigate` | `fill` | `click` | `assert` | `wait`
 3. **For fill actions** — pick the locator in this priority order:
-   - **BEST**: If DOM Fields shows a field whose label matches the target AND it has a `name` attribute → use `page.locator('input[name="exact_name"]')`. This is immune to ARIA bugs.
+   - **BEST**: If DOM Fields shows a field whose label/placeholder/id matches the target AND it has a `name` attribute → use `page.locator('input[name="exact_name"]')`. This is immune to ARIA bugs.
+   - **CRITICAL FOR PASSWORD**: If the step says "Password" or "password", look for a DOM field with `type="password"` and use its `name` attribute: `page.locator('input[type="password"]')` or `page.locator('input[name="exact_password_name"]')`. NEVER reuse the email/username locator for a password field.
    - **GOOD**: If ARIA snapshot shows `textbox "Label"` matching → use `page.getByRole('textbox', {name:'Label'})`.
    - **FALLBACK**: `page.getByLabel('Label')` — only if no name attribute exists.
 4. **For click actions** — use what you see in the ARIA snapshot:

@@ -445,19 +445,41 @@ export function parseTestCasesFromMarkdown(markdown: string): import('@/lib/agen
     .filter((tc): tc is NonNullable<typeof tc> => tc !== null && tc.steps.length > 0)
 }
 
-export async function fetchAutomationScript(issueKey: string): Promise<string | null> {
-  const res = await fetch(
-    `${getBaseUrl()}/rest/api/3/issue/${issueKey}?fields=attachment`,
-    { headers: { Authorization: getAuthHeader(), Accept: 'application/json' } }
-  )
-  if (!res.ok) return null
-  const data = await res.json()
-  const attachments: { filename: string; content: string }[] = data.fields?.attachment ?? []
-  const spec = attachments.find((a) => a.filename === `${issueKey}.spec.ts`)
-  if (!spec) return null
-  const contentRes = await fetch(spec.content, {
-    headers: { Authorization: getAuthHeader() },
-  })
-  if (!contentRes.ok) return null
-  return contentRes.text()
+const SCRIPT_MARKER = '[PLAYWRIGHT_SCRIPT]'
+
+export function extractPlaywrightScript(comments: JiraComment[]): string | null {
+  const comment = comments.find(c => c.body.includes(SCRIPT_MARKER))
+  if (!comment) return null
+  const after = comment.body.slice(comment.body.indexOf(SCRIPT_MARKER) + SCRIPT_MARKER.length).trim()
+  // Strip code fences if present
+  return after.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim() || null
+}
+
+export async function savePlaywrightScript(issueKey: string, script: string, comments: JiraComment[]): Promise<void> {
+  const body = `${SCRIPT_MARKER}\n\`\`\`typescript\n${script}\n\`\`\``
+  // Update existing script comment if one already exists
+  const existing = comments.find(c => c.body.includes(SCRIPT_MARKER))
+  if (existing) {
+    await fetch(`${getBaseUrl()}/rest/api/3/issue/${issueKey}/comment/${existing.id}`, {
+      method: 'PUT',
+      headers: { Authorization: getAuthHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        body: {
+          type: 'doc', version: 1,
+          content: [{ type: 'codeBlock', attrs: { language: 'typescript' }, content: [{ type: 'text', text: `${SCRIPT_MARKER}\n${script}` }] }],
+        },
+      }),
+    })
+  } else {
+    await fetch(`${getBaseUrl()}/rest/api/3/issue/${issueKey}/comment`, {
+      method: 'POST',
+      headers: { Authorization: getAuthHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        body: {
+          type: 'doc', version: 1,
+          content: [{ type: 'codeBlock', attrs: { language: 'typescript' }, content: [{ type: 'text', text: `${SCRIPT_MARKER}\n${script}` }] }],
+        },
+      }),
+    })
+  }
 }
