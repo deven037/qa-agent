@@ -72,6 +72,7 @@ COPY --from=builder /app/lib/prompts ./lib/prompts
 # playwright-core needs its full node_modules at runtime (browsers.json etc.)
 COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
 COPY --from=builder /app/node_modules/@playwright ./node_modules/@playwright
+COPY --from=builder /app/node_modules/playwright ./node_modules/playwright
 
 USER nextjs
 
