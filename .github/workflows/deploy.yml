@@ -50,7 +50,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             NEXTAUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}
+            AUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}
             NEXTAUTH_URL=${{ secrets.NEXTAUTH_URL }}
+            AUTH_URL=${{ secrets.NEXTAUTH_URL }}
             MONGODB_URI=${{ secrets.MONGODB_URI }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -78,7 +80,9 @@ jobs:
             # Write env file
             printf '%s\n' \
               'NEXTAUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}' \
+              'AUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}' \
               'NEXTAUTH_URL=${{ secrets.NEXTAUTH_URL }}' \
+              'AUTH_URL=${{ secrets.NEXTAUTH_URL }}' \
               'MONGODB_URI=${{ secrets.MONGODB_URI }}' \
               'GEMINI_API_KEY_1=${{ secrets.GEMINI_API_KEY_1 }}' \
               'GEMINI_API_KEY_2=${{ secrets.GEMINI_API_KEY_2 }}' \
