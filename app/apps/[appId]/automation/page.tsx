@@ -179,18 +179,33 @@ export default function AutomationPage() {
     setLoadingToken(true)
     try {
       const res = await fetch('/api/runner/token')
-      if (res.ok) setRunnerToken((await res.json()).token)
-    } catch { /* ignore */ }
-    finally { setLoadingToken(false) }
+      if (res.ok) {
+        setRunnerToken((await res.json()).token)
+      } else {
+        toast.error(`Failed to load token: ${res.status} ${res.statusText}`)
+      }
+    } catch (e) {
+      toast.error(`Token fetch error: ${String(e)}`)
+    } finally {
+      setLoadingToken(false)
+    }
   }
 
   async function regenerateToken() {
     setLoadingToken(true)
     try {
       const res = await fetch('/api/runner/token', { method: 'POST' })
-      if (res.ok) { setRunnerToken((await res.json()).token); toast.success('Token regenerated') }
-    } catch { /* ignore */ }
-    finally { setLoadingToken(false) }
+      if (res.ok) {
+        setRunnerToken((await res.json()).token)
+        toast.success('Token regenerated')
+      } else {
+        toast.error(`Failed to regenerate token: ${res.status} ${res.statusText}`)
+      }
+    } catch (e) {
+      toast.error(`Token error: ${String(e)}`)
+    } finally {
+      setLoadingToken(false)
+    }
   }
 
   useEffect(() => {
