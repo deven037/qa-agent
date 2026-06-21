@@ -113,3 +113,34 @@ jobs:
 
             # Clean up old images
             docker image prune -f
+
+            # Smoke test — wait for server and verify auth is not broken
+            echo "Waiting for server to start..."
+            for i in $(seq 1 24); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/auth/csrf || true)
+              if [ "$STATUS" = "200" ]; then
+                echo "Server is up (attempt $i)"
+                break
+              fi
+              echo "Attempt $i: got $STATUS, retrying..."
+              sleep 5
+            done
+
+            # Must return 200 from CSRF endpoint (proves NextAuth config is valid)
+            CSRF_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/auth/csrf)
+            if [ "$CSRF_STATUS" != "200" ]; then
+              echo "SMOKE TEST FAILED: /api/auth/csrf returned $CSRF_STATUS (expected 200)"
+              echo "Auth is misconfigured — rolling back"
+              docker stop qa-agent || true
+              exit 1
+            fi
+
+            # Must NOT redirect login to /api/auth/error
+            LOGIN_URL=$(curl -s -o /dev/null -w "%{url_effective}" -L http://localhost:3000/login)
+            if echo "$LOGIN_URL" | grep -q "error="; then
+              echo "SMOKE TEST FAILED: /login redirected to $LOGIN_URL"
+              docker stop qa-agent || true
+              exit 1
+            fi
+
+            echo "Smoke tests passed."
