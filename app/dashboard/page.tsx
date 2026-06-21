@@ -27,19 +27,10 @@ export default async function DashboardPage() {
   ]
 
   return (
-    <div className="min-h-screen" style={{ background: '#f8f7ff' }}>
-      {/* dot grid background */}
-      <div
-        className="pointer-events-none fixed inset-0"
-        style={{
-          backgroundImage: 'radial-gradient(circle, #c4b5fd 1px, transparent 1px)',
-          backgroundSize: '28px 28px',
-          opacity: 0.35,
-        }}
-      />
+    <div className="min-h-screen bg-slate-50">
 
       {/* Header */}
-      <header className="relative z-10 bg-gradient-to-r from-violet-600 via-violet-700 to-indigo-700 px-6 h-14 flex items-center justify-between sticky top-0 shadow-lg shadow-violet-900/20">
+      <header className="bg-gradient-to-r from-violet-600 via-violet-700 to-indigo-700 px-6 h-14 flex items-center justify-between sticky top-0 shadow-lg shadow-violet-900/20">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 bg-white/15 rounded-lg flex items-center justify-center text-white font-bold text-xs border border-white/20">Q</div>
           <span className="font-semibold text-white text-sm tracking-tight">QA Agent</span>
@@ -59,7 +50,7 @@ export default async function DashboardPage() {
         </div>
       </header>
 
-      <main className="relative z-10 max-w-6xl mx-auto px-6 py-10">
+      <main className="max-w-6xl mx-auto px-6 py-10">
 
         {/* Page header */}
         <div className="flex items-start justify-between mb-8 gap-4">

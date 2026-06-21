@@ -16,9 +16,10 @@ export async function POST(req: NextRequest) {
 
   await dbConnect
 
-  const user = await User.findOne({ email: email.toLowerCase() })
+  const user = await User.findOne({
+    $or: [{ email: email.toLowerCase() }, { username: email.toLowerCase() }, { name: { $regex: `^${email.trim()}$`, $options: 'i' } }],
+  })
   if (!user) {
-    // Return same message to avoid email enumeration
     return NextResponse.json({ ok: true })
   }
 

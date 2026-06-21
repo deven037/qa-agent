@@ -20,8 +20,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       async authorize(credentials) {
         if (!credentials?.username || !credentials?.password) return null
         await dbConnect
-        const input = String(credentials.username).trim()
-        const user = await User.findOne({ name: { $regex: `^${input}$`, $options: 'i' } })
+        const input = String(credentials.username).trim().toLowerCase()
+        const user = await User.findOne({
+          $or: [
+            { username: input },
+            { email: input },
+            { name: { $regex: `^${input}$`, $options: 'i' } },
+          ],
+        })
         if (!user) throw new InvalidCredentials()
         const valid = await bcrypt.compare(String(credentials.password), user.passwordHash)
         if (!valid) throw new InvalidCredentials()

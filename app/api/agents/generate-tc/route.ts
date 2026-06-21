@@ -11,8 +11,8 @@ export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session) return new Response('Unauthorized', { status: 401 })
 
-  const { issueKey, appId } = await req.json()
-  if (!issueKey || !appId) return new Response('issueKey and appId required', { status: 400 })
+  const { issueKey, appId, prompt: customPrompt } = await req.json()
+  if ((!issueKey && !customPrompt) || !appId) return new Response('issueKey or prompt, and appId required', { status: 400 })
 
   const app = (await readApps()).find((a) => a.id === appId)
   if (!app) return new Response('App not found', { status: 404 })
@@ -23,21 +23,33 @@ export async function POST(req: NextRequest) {
       const send = (text: string) => controller.enqueue(encoder.encode(`data: ${text}\n\n`))
 
       try {
-        let issue
-        try {
-          issue = await fetchJiraIssue(issueKey)
-        } catch (e) {
-          const msg = String(e)
-          if (msg.includes('404')) {
-            controller.enqueue(encoder.encode(`data: [ERROR] Issue ${issueKey} not found in Jira. Check the issue key and try again.\n\n`))
-          } else {
-            controller.enqueue(encoder.encode(`data: [ERROR] Could not fetch ${issueKey} from Jira: ${msg}\n\n`))
+        let issue: Awaited<ReturnType<typeof fetchJiraIssue>> | null = null
+        if (issueKey) {
+          try {
+            issue = await fetchJiraIssue(issueKey)
+          } catch (e) {
+            const msg = String(e)
+            if (msg.includes('404')) {
+              controller.enqueue(encoder.encode(`data: [ERROR] Issue ${issueKey} not found in Jira. Check the issue key and try again.\n\n`))
+            } else {
+              controller.enqueue(encoder.encode(`data: [ERROR] Could not fetch ${issueKey} from Jira: ${msg}\n\n`))
+            }
+            controller.close()
+            return
           }
-          controller.close()
-          return
         }
 
-        send(`🔍 Analyzing requirements for ${issueKey}...\n`)
+        // Prompt-only mode: synthesise a minimal issue object
+        if (!issue) {
+          issue = {
+            key: 'PROMPT', summary: customPrompt, issueType: 'Task', status: 'To Do',
+            priority: 'Medium', reporter: '', assignee: '', assigneeAvatar: '', reporterAvatar: '',
+            created: new Date().toISOString(), description: customPrompt,
+            acceptanceCriteria: '', comments: [], children: [], testSteps: [],
+          }
+        }
+
+        send(`🔍 Analyzing requirements...\n`)
         const requirements = await requirementAgent(issue, send)
 
         // Load relevant UI context from knowledge base

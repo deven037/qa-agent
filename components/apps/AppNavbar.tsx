@@ -28,29 +28,30 @@ export default function AppNavbar({ appId, appName, jiraProjectKey }: Props) {
       <div className="max-w-7xl mx-auto px-6">
         <div className="flex items-center justify-between h-16">
           {/* Left: app identity */}
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="text-white font-bold text-base tracking-[-0.02em]">{appName}</span>
-            <Badge className="bg-white/15 text-white/90 border-white/20 text-xs font-mono font-normal hover:bg-white/25">
+          <div className="flex items-center gap-2 shrink-0 min-w-0">
+            <span className="text-white font-bold text-base tracking-[-0.02em] truncate max-w-[120px] md:max-w-none">{appName}</span>
+            <Badge className="bg-white/15 text-white/90 border-white/20 text-xs font-mono font-normal hover:bg-white/25 shrink-0">
               {jiraProjectKey}
             </Badge>
           </div>
 
           {/* Center: nav links */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
             {NAV_ITEMS.map(({ label, href, icon: Icon }) => {
               const active = pathname === `${base}/${href}` || pathname.startsWith(`${base}/${href}/`)
               return (
                 <Link
                   key={href}
                   href={`${base}/${href}`}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm tracking-[-0.01em] transition-all whitespace-nowrap ${
+                  title={label}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm tracking-[-0.01em] transition-all whitespace-nowrap shrink-0 ${
                     active
                       ? 'bg-white text-violet-700 shadow-sm font-medium'
                       : 'text-white/70 hover:text-white hover:bg-white/10 font-normal'
                   }`}
                 >
                   <Icon className="w-4 h-4 shrink-0" />
-                  {label}
+                  <span className="hidden md:inline">{label}</span>
                 </Link>
               )
             })}
