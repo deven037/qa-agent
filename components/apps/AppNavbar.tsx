@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
-import { LayoutDashboard, ClipboardList, TestTube, Zap, Home } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, TestTube, Zap, Home, Settings } from 'lucide-react'
 
 interface Props {
   appId: string
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { label: 'Work Items', href: 'work-items', icon: ClipboardList },
   { label: 'Manual TC Creation', href: 'manual-tc', icon: TestTube },
   { label: 'Automation', href: 'automation', icon: Zap },
+  { label: 'Settings', href: 'settings', icon: Settings },
 ]
 
 export default function AppNavbar({ appId, appName, jiraProjectKey }: Props) {

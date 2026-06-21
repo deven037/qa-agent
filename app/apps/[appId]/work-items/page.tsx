@@ -38,15 +38,15 @@ interface FullIssue {
 }
 
 // Color + icon config per issue type
-const TYPE_CONFIG: Record<string, { color: string; header: string; icon: React.ElementType; badge: string }> = {
-  Story:       { color: 'border-violet-200 bg-violet-50',  header: 'bg-violet-600',  icon: BookOpen,     badge: 'bg-violet-100 text-violet-700 border-violet-200' },
-  Bug:         { color: 'border-red-200 bg-red-50',        header: 'bg-red-500',      icon: Bug,          badge: 'bg-red-100 text-red-700 border-red-200' },
-  Task:        { color: 'border-blue-200 bg-blue-50',      header: 'bg-blue-600',     icon: ClipboardList, badge: 'bg-blue-100 text-blue-700 border-blue-200' },
-  Epic:        { color: 'border-orange-200 bg-orange-50',  header: 'bg-orange-500',   icon: Layers,       badge: 'bg-orange-100 text-orange-700 border-orange-200' },
-  'Test Case': { color: 'border-emerald-200 bg-emerald-50', header: 'bg-emerald-600', icon: Zap,          badge: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+const TYPE_CONFIG: Record<string, { color: string; header: string; headerGrad: string; icon: React.ElementType; badge: string; emptyText: string }> = {
+  Story:       { color: 'border-violet-100 bg-white',    header: 'bg-violet-600',  headerGrad: 'from-violet-500 to-violet-700',  icon: BookOpen,      badge: 'bg-violet-50 text-violet-700 border-violet-200',   emptyText: 'Stories describe individual user-facing requirements, tested with manual test cases.' },
+  Bug:         { color: 'border-red-100 bg-white',       header: 'bg-red-500',     headerGrad: 'from-red-500 to-rose-600',        icon: Bug,           badge: 'bg-red-50 text-red-700 border-red-200',            emptyText: 'Bugs track defects found during testing. Link them to test cases to verify the fix.' },
+  Task:        { color: 'border-blue-100 bg-white',      header: 'bg-blue-600',    headerGrad: 'from-blue-500 to-blue-700',       icon: ClipboardList, badge: 'bg-blue-50 text-blue-700 border-blue-200',          emptyText: 'Tasks are units of work. Add test steps to automate or manually verify them.' },
+  Epic:        { color: 'border-orange-100 bg-white',    header: 'bg-orange-500',  headerGrad: 'from-orange-500 to-orange-600',   icon: Layers,        badge: 'bg-orange-50 text-orange-700 border-orange-200',    emptyText: 'Epics group large features. Break them into Stories covering individual requirements.' },
+  'Test Case': { color: 'border-emerald-100 bg-white',   header: 'bg-emerald-600', headerGrad: 'from-emerald-500 to-teal-600',    icon: Zap,           badge: 'bg-emerald-50 text-emerald-700 border-emerald-200', emptyText: 'Test Cases define steps and expected results to verify features or fixes.' },
 }
 
-const DEFAULT_CONFIG = { color: 'border-slate-200 bg-slate-50', header: 'bg-slate-500', icon: ClipboardList, badge: 'bg-slate-100 text-slate-700 border-slate-200' }
+const DEFAULT_CONFIG = { color: 'border-slate-100 bg-white', header: 'bg-slate-500', headerGrad: 'from-slate-500 to-slate-600', icon: ClipboardList, badge: 'bg-slate-50 text-slate-700 border-slate-200', emptyText: 'No items found.' }
 
 function getConfig(type: string) {
   return TYPE_CONFIG[type] ?? DEFAULT_CONFIG
@@ -819,40 +819,32 @@ function TypeContainer({
   const cfg = getConfig(type)
   const Icon = cfg.icon
 
+  const pluralLabel = type === 'Story' ? 'Stories' : type === 'Bug' ? 'Bugs' : type === 'Epic' ? 'Epics' : `${type}s`
+
   return (
-    <div className={`border rounded-xl overflow-hidden ${cfg.color}`}>
+    <div className={`border rounded-2xl overflow-hidden shadow-sm ${cfg.color}`}>
       {/* Header */}
-      <div className={`${cfg.header} px-4 py-3 flex items-center justify-between`}>
-        <div
-          className="flex items-center gap-2 cursor-help"
-          title={
-            type === 'Story' ? 'Stories describe individual user-facing requirements. Each story is tested with manual test cases and linked to an Epic.'
-            : type === 'Bug' ? 'Bugs track defects found during testing. Generate a manual test case or link one to verify the fix.'
-            : type === 'Epic' ? 'Epics group large features or initiatives. Break them down into Stories covering individual requirements.'
-            : type === 'Task' ? 'Tasks are units of work. Add test steps to automate or manually verify them.'
-            : type === 'Test Case' ? 'Test Cases define the steps and expected results to verify a feature or fix.'
-            : `${type} work items`
-          }
-        >
-          <Icon className="w-4 h-4 text-white/80" />
-          <span className="text-sm font-semibold text-white">
-            {type === 'Story' ? 'Stories' : type === 'Bug' ? 'Bugs' : type === 'Epic' ? 'Epics' : `${type}s`}
-          </span>
+      <div className={`bg-gradient-to-r ${cfg.headerGrad} px-4 py-3 flex items-center justify-between`}>
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center">
+            <Icon className="w-3.5 h-3.5 text-white" />
+          </div>
+          <span className="text-sm font-semibold text-white">{pluralLabel}</span>
           {!loading && (
-            <span className="text-xs bg-white/20 text-white px-2 py-0.5 rounded-full font-medium">
+            <span className="text-xs bg-white/20 text-white px-2 py-0.5 rounded-full font-medium tabular-nums">
               {issues.length}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <button
             onClick={() => onCreateClick(type)}
-            className="flex items-center gap-1 text-xs text-white/80 hover:text-white bg-white/10 hover:bg-white/20 px-2 py-1 rounded-lg transition-all"
+            className="flex items-center gap-1 text-xs text-white font-medium bg-white/15 hover:bg-white/25 px-2.5 py-1 rounded-lg transition-all"
           >
-            <Plus className="w-3.5 h-3.5" /> New
+            <Plus className="w-3 h-3" /> New
           </button>
-          <button onClick={() => setCollapsed((c) => !c)} className="text-white/60 hover:text-white">
-            {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+          <button onClick={() => setCollapsed((c) => !c)} className="w-6 h-6 flex items-center justify-center rounded-md text-white/60 hover:text-white hover:bg-white/10 transition-all">
+            {collapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
@@ -861,30 +853,17 @@ function TypeContainer({
       {!collapsed && (
         <div className="p-3 space-y-1.5">
           {loading ? (
-            <div className="flex items-center gap-2 py-4 justify-center">
-              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+            <div className="flex items-center gap-2 py-6 justify-center">
+              <Loader2 className="w-4 h-4 animate-spin text-slate-300" />
               <span className="text-xs text-slate-400">Loading…</span>
             </div>
           ) : issues.length === 0 ? (
-            <div className="py-4 px-3 text-center space-y-1.5">
-              <p className="text-xs text-slate-400">
-                No {type === 'Story' ? 'stories' : type === 'Bug' ? 'bugs' : type === 'Epic' ? 'epics' : `${type.toLowerCase()}s`} found
-              </p>
-              {type === 'Story' && (
-                <p className="text-xs text-slate-400/70 leading-relaxed">
-                  Stories describe individual user-facing requirements. Each story is tested with manual test cases and linked to an Epic.
-                </p>
-              )}
-              {type === 'Bug' && (
-                <p className="text-xs text-slate-400/70 leading-relaxed">
-                  Bugs track defects found during testing. Link them to manual test cases to verify the fix.
-                </p>
-              )}
-              {type === 'Epic' && (
-                <p className="text-xs text-slate-400/70 leading-relaxed">
-                  Epics group large features or initiatives. Break them down into Stories that cover individual requirements.
-                </p>
-              )}
+            <div className="py-6 px-3 text-center space-y-1">
+              <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center mx-auto mb-2">
+                <Icon className="w-4 h-4 text-slate-300" />
+              </div>
+              <p className="text-xs font-medium text-slate-400">No {pluralLabel.toLowerCase()} found</p>
+              <p className="text-xs text-slate-300 leading-relaxed max-w-[200px] mx-auto">{cfg.emptyText}</p>
             </div>
           ) : (
             <>
@@ -892,20 +871,14 @@ function TypeContainer({
                 <button
                   key={issue.key}
                   onClick={() => onSelect(issue.key)}
-                  className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 bg-white rounded-lg border border-white hover:border-slate-200 hover:shadow-sm transition-all group"
+                  className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 bg-white rounded-xl border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all group"
                 >
                   <Badge variant="outline" className={`font-mono text-xs shrink-0 ${cfg.badge}`}>
                     {issue.key}
                   </Badge>
-                  <span
-                    className="text-sm text-slate-700 truncate group-hover:text-slate-900"
-                    title={
-                      type === 'Story' ? 'Describes an individual user-facing requirement. Tested with manual test cases and linked to an Epic.'
-                      : type === 'Bug' ? 'A defect found during testing. Generate a manual test case or link one to verify the fix.'
-                      : type === 'Epic' ? 'A large feature or initiative. Break it down into Stories covering individual requirements.'
-                      : type === 'Task' ? 'A unit of work. Add test steps to automate or manually verify it.'
-                      : issue.summary}
-                  >{issue.summary}</span>
+                  <span className="text-sm text-slate-700 truncate group-hover:text-slate-900">
+                    {issue.summary}
+                  </span>
                   <ExternalLink className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-400 shrink-0 ml-auto" />
                 </button>
               ))}
@@ -942,6 +915,10 @@ function CreateModal({
 
   async function handleCreate() {
     if (!summary.trim()) return
+    if (!projectKey) {
+      toast.error('No Jira project linked — go to Settings and set a project key')
+      return
+    }
     setCreating(true)
     try {
       const res = await fetch('/api/jira/issues', {
@@ -961,64 +938,123 @@ function CreateModal({
         const data = await res.json()
         toast.success(`Created ${data.key}`)
         onCreated(data.key, createType, summary)
-      } else toast.error('Failed to create issue')
-    } catch { toast.error('Failed to create issue') }
+      } else {
+        const err = await res.json().catch(() => ({}))
+        toast.error(err.error ?? 'Failed to create issue')
+      }
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Failed to create issue') }
     finally { setCreating(false) }
   }
 
+  const TYPE_COLOR: Record<string, string> = {
+    Task: 'bg-blue-100 text-blue-700',
+    Story: 'bg-purple-100 text-purple-700',
+    Bug: 'bg-red-100 text-red-700',
+    Epic: 'bg-orange-100 text-orange-700',
+    'Test Case': 'bg-emerald-100 text-emerald-700',
+    Subtask: 'bg-slate-100 text-slate-600',
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-slate-800 flex items-center gap-2">
-            <Plus className="w-4 h-4 text-violet-600" /> Create Work Item
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
-        </div>
-        {parentKey && (
-          <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
-            <Layers className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-            <span className="text-xs text-orange-700">
-              Under Epic <span className="font-mono font-semibold">{parentKey}</span>
-              {parentSummary && <span className="text-orange-500"> — {parentSummary}</span>}
-            </span>
-          </div>
-        )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(15,10,30,0.5)', backdropFilter: 'blur(4px)' }}>
+      <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden">
 
-        <div className="grid grid-cols-2 gap-3">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-violet-600 to-indigo-700 px-6 pt-5 pb-6">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-lg bg-white/20 flex items-center justify-center">
+                <Plus className="w-3.5 h-3.5 text-white" />
+              </div>
+              <span className="text-white font-semibold text-sm">Create work item</span>
+            </div>
+            <button onClick={onClose} className="w-7 h-7 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors">
+              <X className="w-3.5 h-3.5 text-white" />
+            </button>
+          </div>
+          <p className="text-white/50 text-xs mt-1 pl-8">
+            {projectKey && <span className="font-mono">{projectKey}</span>}
+            {parentKey && <span> · under <span className="font-mono font-semibold text-white/70">{parentKey}</span>{parentSummary && ` — ${parentSummary}`}</span>}
+          </p>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+
+          {/* Type chips */}
           <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Type</label>
-            <select value={createType} onChange={(e) => setCreateType(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400">
-              {issueTypes.map((t) => <option key={t}>{t}</option>)}
-            </select>
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide block mb-2">Type</label>
+            <div className="flex flex-wrap gap-2">
+              {issueTypes.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setCreateType(t)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+                    createType === t
+                      ? 'border-violet-500 bg-violet-50 text-violet-700 shadow-sm'
+                      : `border-slate-200 ${TYPE_COLOR[t] ?? 'bg-slate-50 text-slate-600'} hover:border-slate-300`
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
           </div>
+
+          {/* Summary */}
           <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Summary *</label>
-            <input value={summary} onChange={(e) => setSummary(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
-              placeholder="Brief title..." autoFocus />
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">
+              Summary <span className="text-rose-400">*</span>
+            </label>
+            <input
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              className="w-full h-10 px-3.5 rounded-xl border border-slate-200 bg-white text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition"
+              placeholder="Brief title…"
+              autoFocus
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Description</label>
+            <textarea
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              rows={3}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 text-sm resize-none placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition"
+              placeholder="Optional description…"
+            />
+          </div>
+
+          {/* Assignee + Reporter */}
+          <div className="grid grid-cols-2 gap-3">
+            <UserPicker label="Assignee" projectKey={projectKey} value={assignee} onChange={setAssignee} />
+            <UserPicker label="Reporter" projectKey={projectKey} value={reporter} onChange={setReporter} />
           </div>
         </div>
 
-        <div>
-          <label className="text-xs font-medium text-slate-500 mb-1 block">Description</label>
-          <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={3}
-            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-violet-400"
-            placeholder="Optional description…" />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <UserPicker label="Assignee" projectKey={projectKey} value={assignee} onChange={setAssignee} />
-          <UserPicker label="Reporter" projectKey={projectKey} value={reporter} onChange={setReporter} />
-        </div>
-
-        <div className="flex gap-2 justify-end">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleCreate} disabled={creating || !summary.trim()} className="bg-violet-600 hover:bg-violet-700">
-            {creating ? 'Creating…' : 'Create'}
-          </Button>
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-400">
+            {summary.trim() ? `Creating as ${createType}` : 'Enter a title to continue'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="h-9 px-4 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100 active:scale-[0.98] transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={creating || !summary.trim()}
+              className="h-9 px-5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white text-sm font-semibold shadow-md shadow-violet-200 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {creating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</> : 'Create'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1066,8 +1102,8 @@ function IssuesPieChart({ issueTypes, issuesByType, loading }: {
       })
 
   return (
-    <div className="border border-slate-200 rounded-xl bg-white p-4 shadow-sm flex flex-col h-full">
-      <h3 className="text-sm font-semibold text-slate-700 mb-3">Issue Distribution</h3>
+    <div className="border border-slate-100 rounded-2xl bg-white p-5 shadow-sm flex flex-col h-full">
+      <h3 className="text-sm font-semibold text-slate-700 mb-4">Issue Distribution</h3>
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-slate-300" />
@@ -1208,38 +1244,36 @@ export default function WorkItemsPage() {
     <div className="space-y-5">
 
       {/* Global search bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Search across all work items…"
-              className="w-full h-10 pl-10 pr-9 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-400 text-sm transition-colors"
-            />
-            {searchQuery && (
-              <button onClick={() => { setSearchQuery(''); setSearchResults(null) }}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <Search className="w-4 h-4 text-slate-400 shrink-0" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => handleSearch(e.target.value)}
+            placeholder="Search across all work items…"
+            className="flex-1 text-sm text-slate-700 placeholder:text-slate-400 bg-transparent focus:outline-none"
+          />
+          {searchQuery && (
+            <button onClick={() => { setSearchQuery(''); setSearchResults(null) }}
+              className="w-5 h-5 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors shrink-0">
+              <X className="w-3 h-3 text-slate-500" />
+            </button>
+          )}
         </div>
 
-        {/* Search results dropdown */}
+        {/* Search results */}
         {(searching || searchResults) && searchQuery && (
-          <div className="mt-2 space-y-1">
+          <div className="border-t border-slate-100 px-3 pb-3 pt-2 space-y-1">
             {searching ? (
-              <div className="flex items-center gap-2 py-2 px-3 text-xs text-slate-400">
+              <div className="flex items-center gap-2 py-2 px-2 text-xs text-slate-400">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
               </div>
             ) : searchResults && searchResults.length === 0 ? (
-              <p className="text-xs text-slate-400 px-3 py-2">No results found</p>
+              <p className="text-xs text-slate-400 px-2 py-2">No results found</p>
             ) : searchResults?.map((r) => (
               <button key={r.key} onClick={() => openIssue(r.key)}
-                className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 border border-slate-100 bg-slate-50 rounded-lg hover:border-violet-200 hover:bg-violet-50 transition-all">
+                className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-100 hover:border-violet-200 hover:bg-violet-50 transition-all">
                 <Badge variant="outline" className="font-mono text-xs shrink-0">{r.key}</Badge>
                 <span className="text-sm text-slate-600 truncate">{r.summary}</span>
               </button>
