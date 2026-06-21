@@ -102,6 +102,8 @@ jobs:
               --name qa-agent \
               --restart unless-stopped \
               -p 3000:3000 \
+              --dns 8.8.8.8 \
+              --dns 8.8.4.4 \
               --env-file /home/${{ secrets.VM_USER }}/.env.production \
               ghcr.io/${{ github.repository }}:latest
 
