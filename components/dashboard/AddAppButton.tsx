@@ -164,7 +164,7 @@ export default function AddAppButton({ ghost }: { ghost?: boolean } = {}) {
           </div>
 
           {/* Base URL + Jira key side by side */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1">
                 <Globe className="w-3 h-3" /> Base URL
@@ -231,7 +231,7 @@ export default function AddAppButton({ ghost }: { ghost?: boolean } = {}) {
           </div>
 
           {authStrategy === 'email-password' && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Email</label>
                 <input className={inputCls} type="email" placeholder="user@example.com" value={appEmail} onChange={(e) => setAppEmail(e.target.value)} />

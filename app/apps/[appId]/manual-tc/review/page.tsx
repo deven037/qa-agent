@@ -151,7 +151,7 @@ export default function ManualTCReviewPage() {
           key={generateRound}
           ref={generateRef}
           endpoint="/api/agents/generate-tc"
-          body={{ issueKey: issueKey || undefined, appId }}
+          body={{ issueKey: issueKey || undefined, prompt: prompt || undefined, appId }}
           onDone={handleGenerateDone}
           onError={(e) => toast.error(`Generation failed: ${e}`)}
           label="Test Case Generator"
