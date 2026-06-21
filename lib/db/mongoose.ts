@@ -16,7 +16,7 @@ const cached = global._mongooseConn ?? (global._mongooseConn = mongoose.connect(
   connectTimeoutMS: 8000,
   socketTimeoutMS: 10000,
   tls: true,
-  tlsAllowInvalidCertificates: process.env.NODE_ENV !== 'production',
+  tlsAllowInvalidCertificates: true,
 }))
 
 export default cached
