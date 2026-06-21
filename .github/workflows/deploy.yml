@@ -66,7 +66,6 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          envs: NEXTAUTH_SECRET,NEXTAUTH_URL,MONGODB_URI,GEMINI_API_KEY_1,GEMINI_API_KEY_2,GROQ_API_KEY_1,GROQ_API_KEY_2,JIRA_API_TOKEN,JIRA_BASE_URL,JIRA_ADMIN_EMAIL,NEXT_PUBLIC_JIRA_BASE_URL,CEREBRAS_API_KEY_1,OPENROUTER_API_KEY_1,TOGETHER_API_KEY_1
           script: |
             set -e
 
@@ -76,29 +75,34 @@ jobs:
             # Pull the latest image
             docker pull ghcr.io/${{ github.repository }}:latest
 
+            # Write env file
+            printf '%s\n' \
+              'NEXTAUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}' \
+              'NEXTAUTH_URL=${{ secrets.NEXTAUTH_URL }}' \
+              'MONGODB_URI=${{ secrets.MONGODB_URI }}' \
+              'GEMINI_API_KEY_1=${{ secrets.GEMINI_API_KEY_1 }}' \
+              'GEMINI_API_KEY_2=${{ secrets.GEMINI_API_KEY_2 }}' \
+              'GROQ_API_KEY_1=${{ secrets.GROQ_API_KEY_1 }}' \
+              'GROQ_API_KEY_2=${{ secrets.GROQ_API_KEY_2 }}' \
+              'JIRA_API_TOKEN=${{ secrets.JIRA_API_TOKEN }}' \
+              'JIRA_BASE_URL=${{ secrets.JIRA_BASE_URL }}' \
+              'JIRA_ADMIN_EMAIL=${{ secrets.JIRA_ADMIN_EMAIL }}' \
+              'NEXT_PUBLIC_JIRA_BASE_URL=${{ secrets.NEXT_PUBLIC_JIRA_BASE_URL }}' \
+              'CEREBRAS_API_KEY_1=${{ secrets.CEREBRAS_API_KEY_1 }}' \
+              'OPENROUTER_API_KEY_1=${{ secrets.OPENROUTER_API_KEY_1 }}' \
+              'TOGETHER_API_KEY_1=${{ secrets.TOGETHER_API_KEY_1 }}' \
+              > /home/${{ secrets.VM_USER }}/.env.production
+
             # Stop old container
             docker stop qa-agent || true
             docker rm qa-agent || true
 
-            # Start new container with all env vars
+            # Start new container with env file
             docker run -d \
               --name qa-agent \
               --restart unless-stopped \
               -p 3000:3000 \
-              -e NEXTAUTH_SECRET="$NEXTAUTH_SECRET" \
-              -e NEXTAUTH_URL="$NEXTAUTH_URL" \
-              -e MONGODB_URI="$MONGODB_URI" \
-              -e GEMINI_API_KEY_1="$GEMINI_API_KEY_1" \
-              -e GEMINI_API_KEY_2="$GEMINI_API_KEY_2" \
-              -e GROQ_API_KEY_1="$GROQ_API_KEY_1" \
-              -e GROQ_API_KEY_2="$GROQ_API_KEY_2" \
-              -e JIRA_API_TOKEN="$JIRA_API_TOKEN" \
-              -e JIRA_BASE_URL="$JIRA_BASE_URL" \
-              -e JIRA_ADMIN_EMAIL="$JIRA_ADMIN_EMAIL" \
-              -e NEXT_PUBLIC_JIRA_BASE_URL="$NEXT_PUBLIC_JIRA_BASE_URL" \
-              -e CEREBRAS_API_KEY_1="$CEREBRAS_API_KEY_1" \
-              -e OPENROUTER_API_KEY_1="$OPENROUTER_API_KEY_1" \
-              -e TOGETHER_API_KEY_1="$TOGETHER_API_KEY_1" \
+              --env-file /home/${{ secrets.VM_USER }}/.env.production \
               ghcr.io/${{ github.repository }}:latest
 
             # Clean up old images
