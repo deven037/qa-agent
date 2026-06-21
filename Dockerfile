@@ -3,6 +3,7 @@ FROM node:20-slim AS base
 # Install system dependencies required by Playwright's Chromium
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    openssl \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -40,6 +41,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     xdg-utils \
     --no-install-recommends && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -72,6 +74,8 @@ FROM base AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--tls-min-v1.2"
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
