@@ -11,12 +11,18 @@ declare global {
   var _mongooseConn: Promise<typeof mongoose> | undefined
 }
 
-const cached = global._mongooseConn ?? (global._mongooseConn = mongoose.connect(MONGODB_URI, {
-  serverSelectionTimeoutMS: 8000,
-  connectTimeoutMS: 8000,
-  socketTimeoutMS: 10000,
-  tls: true,
-  tlsAllowInvalidCertificates: true,
-}))
+function createConnection() {
+  const promise = mongoose.connect(MONGODB_URI, {
+    serverSelectionTimeoutMS: 8000,
+    connectTimeoutMS: 8000,
+    socketTimeoutMS: 10000,
+    tls: true,
+    tlsAllowInvalidCertificates: true,
+  })
+  promise.catch(() => { global._mongooseConn = undefined })
+  return promise
+}
+
+const cached = global._mongooseConn ?? (global._mongooseConn = createConnection())
 
 export default cached
