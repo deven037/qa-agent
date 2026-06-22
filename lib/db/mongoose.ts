@@ -11,7 +11,7 @@ declare global {
   var _mongooseConn: Promise<typeof mongoose> | undefined
 }
 
-function createConnection() {
+function connect() {
   const promise = mongoose.connect(MONGODB_URI, {
     serverSelectionTimeoutMS: 8000,
     connectTimeoutMS: 8000,
@@ -23,6 +23,17 @@ function createConnection() {
   return promise
 }
 
-const cached = global._mongooseConn ?? (global._mongooseConn = createConnection())
+// Use a getter so each `await dbConnect` re-checks global state.
+// If a previous connection attempt failed and cleared _mongooseConn, this retries.
+const dbConnect = {
+  then: (onfulfilled?: ((value: typeof mongoose) => unknown) | null, onrejected?: ((reason: unknown) => unknown) | null) => {
+    if (!global._mongooseConn) global._mongooseConn = connect()
+    return global._mongooseConn.then(onfulfilled ?? undefined, onrejected ?? undefined)
+  },
+  catch: (onrejected?: ((reason: unknown) => unknown) | null) => {
+    if (!global._mongooseConn) global._mongooseConn = connect()
+    return global._mongooseConn.catch(onrejected ?? undefined)
+  },
+}
 
-export default cached
+export default dbConnect
