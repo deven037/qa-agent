@@ -10,6 +10,7 @@ const AppSchema = new Schema({
   credentialEnvVars: { type: Map, of: String, default: {} },
   storePassword: { type: String },
   playwrightTestsDir: { type: String, required: true },
+  automationInstructions: { type: String, default: '' },
   createdAt: { type: String, required: true },
 })
 

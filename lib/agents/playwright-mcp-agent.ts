@@ -1,9 +1,9 @@
 import { chromium, firefox, webkit, Browser, Page, Locator, FrameLocator } from 'playwright'
-import { AppConfig } from '@/lib/config/store'
+import { AppConfig, formatCredentialsForLLM } from '@/lib/config/store'
 import { PageKnowledge } from '@/lib/db/models/AppKnowledge'
 import { TestCase } from '@/lib/agents/testcase-agent'
 import { callLLM } from '@/lib/ai/gemini'
-import { fillPrompt } from '@/lib/prompts/loader'
+import { fillPrompt, loadGlobalInstructions } from '@/lib/prompts/loader'
 import { formatPagesForParsing, formatLocatorsForCurrentPage, formatKnowledgeForAnalyst } from '@/lib/knowledge/formatter'
 
 // ─── Shared event types ───────────────────────────────────────────────────────
@@ -62,6 +62,50 @@ export interface ParsedStep {
 export interface ResolvedStepRecord {
   original: string
   parsed: ParsedStep
+}
+
+// ─── Error classification ─────────────────────────────────────────────────────
+
+export type ErrorClass =
+  | 'not_found'        // 0 elements matched
+  | 'strict_mode'      // >1 elements matched — locator too broad
+  | 'not_visible'      // element exists but hidden / off-screen
+  | 'not_interactable' // element exists, visible, but disabled / covered
+  | 'nav_blocked'      // navigation redirected unexpectedly
+  | 'timeout'          // page/element didn't settle in time
+  | 'other'
+
+export function classifyError(err: Error): { cls: ErrorClass; matchCount?: number } {
+  const msg = err.message.toLowerCase()
+
+  // "strict mode violation: locator('...') resolved to 3 elements"
+  const strictMatch = err.message.match(/resolved to (\d+) elements/)
+  if (strictMatch || msg.includes('strict mode')) {
+    return { cls: 'strict_mode', matchCount: strictMatch ? parseInt(strictMatch[1]) : undefined }
+  }
+
+  if (msg.includes('not visible') || msg.includes('hidden') || msg.includes('display: none') || msg.includes('visibility: hidden')) {
+    return { cls: 'not_visible' }
+  }
+
+  if (msg.includes('not enabled') || msg.includes('disabled') || msg.includes('not interactable') || msg.includes('pointer-events: none')) {
+    return { cls: 'not_interactable' }
+  }
+
+  if (msg.includes('redirected to login') || msg.includes('nav_blocked')) {
+    return { cls: 'nav_blocked' }
+  }
+
+  // Timeout usually means 0 elements — they never appeared
+  if (msg.includes('timeout') && (msg.includes('waiting for') || msg.includes('locator'))) {
+    return { cls: 'not_found' }
+  }
+
+  if (msg.includes('no elements') || msg.includes('0 elements') || msg.includes('could not find') || msg.includes('could not fill') || msg.includes('could not click')) {
+    return { cls: 'not_found' }
+  }
+
+  return { cls: 'other' }
 }
 
 // ─── Locator resolution ───────────────────────────────────────────────────────
@@ -126,7 +170,12 @@ function findBestLocator(target: string, pages: PageKnowledge[]): string | null 
         const name = (field.label || field.placeholder || field.htmlName || '').toLowerCase()
         const score = scoreMatch(name, tl)
         if (score > 0) {
-          consider(field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole || field.locators.byName, score)
+          // Priority: testId > id > name attr > label > placeholder > role
+          consider(
+            field.locators.byTestId || field.locators.byId || field.locators.byName
+            || field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole,
+            score
+          )
         }
       }
       if (form.submitButtonLocator) {
@@ -138,7 +187,11 @@ function findBestLocator(target: string, pages: PageKnowledge[]): string | null 
       const name = (btn.name || btn.label || '').toLowerCase()
       const score = scoreMatch(name, tl)
       if (score > 0) {
-        consider(btn.locators.getByRole || btn.locators.getByText || btn.locators.getByLabel, score)
+        consider(
+          btn.locators.byTestId || btn.locators.byId || btn.locators.getByRole
+          || btn.locators.getByText || btn.locators.getByLabel || btn.locators.byName,
+          score
+        )
       }
     }
   }
@@ -341,6 +394,59 @@ async function dismissOverlays(
 
 // ─── ARIA snapshot ────────────────────────────────────────────────────────────
 
+// ─── Element context extractor ────────────────────────────────────────────────
+// Extracts parent element context so healer can generate scoped locators.
+// Used when element is not uniquely identifiable (strict mode / ambiguous).
+
+async function extractElementContext(page: Page, targetText: string): Promise<string> {
+  try {
+    const ctx = await page.evaluate((target) => {
+      const trim = (s: string | null | undefined) => s?.trim().slice(0, 80) || ''
+      const results: string[] = []
+
+      // Find all elements whose text includes the target
+      const all = Array.from(document.querySelectorAll('a, button, input, [role="button"]'))
+      const matches = all.filter(el => {
+        const text = trim((el as HTMLElement).innerText || (el as HTMLInputElement).value || el.getAttribute('aria-label'))
+        return text.toLowerCase().includes(target.toLowerCase())
+      })
+
+      for (const el of matches.slice(0, 5)) {
+        const tag = el.tagName.toLowerCase()
+        const cls = Array.from(el.classList).slice(0, 3).join('.')
+        const id = el.id ? `#${el.id}` : ''
+        const ariaLabel = el.getAttribute('aria-label') || ''
+        const testId = el.getAttribute('data-testid') || el.getAttribute('data-cy') || ''
+        const href = (el as HTMLAnchorElement).href || ''
+        const onclick = el.hasAttribute('onclick') ? 'onclick' : ''
+
+        // Walk up to find a meaningful parent (section, article, li, [class*="product"], etc.)
+        let parent = el.parentElement
+        const parentInfo: string[] = []
+        for (let depth = 0; depth < 5 && parent; depth++, parent = parent.parentElement) {
+          const pTag = parent.tagName.toLowerCase()
+          const pCls = Array.from(parent.classList).slice(0, 2).join('.')
+          const pId = parent.id ? `#${parent.id}` : ''
+          // Stop at meaningful semantic containers
+          if (['section', 'article', 'li', 'form', 'nav', 'header', 'main', 'aside'].includes(pTag) || pId || pCls) {
+            parentInfo.push(`${pTag}${pId || '.' + pCls || ''}`)
+            if (parentInfo.length >= 2) break
+          }
+        }
+
+        const self = `<${tag}${id ? ' id="' + id.slice(1) + '"' : ''}${cls ? ' class="' + cls + '"' : ''}${ariaLabel ? ' aria-label="' + ariaLabel + '"' : ''}${testId ? ' data-testid="' + testId + '"' : ''}${onclick ? ' ' + onclick : ''}${href ? ' href="...' + href.slice(-20) + '"' : ''}>`
+        results.push(`${parentInfo.join(' > ')} > ${self}`)
+      }
+
+      return results.join('\n') || '(context unavailable)'
+    }, targetText)
+
+    return `Matching DOM elements for "${targetText}":\n${ctx}`
+  } catch {
+    return '(context unavailable)'
+  }
+}
+
 async function getAriaSnapshot(page: Page): Promise<string> {
   try {
     const main = page.locator('main, [role="main"], #content, #app, body').first()
@@ -519,6 +625,14 @@ function parseStepRegex(step: string): ParsedStep | null {
   return null
 }
 
+// ─── Instruction merging ──────────────────────────────────────────────────────
+
+function mergeInstructions(appConfig: AppConfig): string {
+  const global = loadGlobalInstructions()
+  const perApp = appConfig.automationInstructions?.trim()
+  return perApp ? `${global}\n\n## App-Specific Overrides\n${perApp}` : global
+}
+
 // ─── Proactive LLM step resolver ─────────────────────────────────────────────
 
 async function resolveStepWithLLM(
@@ -538,13 +652,16 @@ async function resolveStepWithLLM(
 
   const kbHints = formatPagesForParsing(pages)
 
+  const instructions = mergeInstructions(appConfig)
   const prompt = fillPrompt('step-resolver', {
     current_url: page.url(),
     aria_snapshot: ariaSnap,
     dom_fields: domFieldsRaw,
     knowledge_base: kbHints,
+    app_credentials: formatCredentialsForLLM(appConfig),
     step,
     expected: expected || '(not specified)',
+    custom_instructions: instructions,
   })
 
   // ── Field-matching: pure DOM reasoning, no ARIA noise ──────────────────────
@@ -595,7 +712,7 @@ async function resolveStepWithLLM(
   const focusedPrompt = `You are a Playwright locator expert. A form on ${page.url()} has these input fields:\n${fieldList}\n\nTest step: "${step}"\n\nWhich field index matches the target? Return JSON only:\n{"index": <1-based number>, "locator": "<playwright locator expression>", "value": "<value to type>"}`
 
   try {
-    const raw = await callLLM(focusedPrompt, 'Return a single JSON object only. No markdown. No explanation.')
+    const raw = await callLLM(focusedPrompt, `You are a senior QA automation engineer.\n${instructions}\nReturn a single JSON object only. No markdown. No explanation.`)
     const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
     const match = cleaned.match(/\{[\s\S]*\}/)
     if (!match) throw new Error('No JSON')
@@ -609,7 +726,7 @@ async function resolveStepWithLLM(
 
   // Full resolver as last resort
   try {
-    const raw = await callLLM(prompt, 'You are a Playwright automation expert. Return a single JSON object only. No markdown.')
+    const raw = await callLLM(prompt, `You are a senior QA automation engineer.\n${instructions}\nReturn a single JSON object only. No markdown.`)
     const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
     const match = cleaned.match(/\{[\s\S]*\}/)
     if (!match) throw new Error('No JSON object in response')
@@ -665,42 +782,81 @@ async function healStep(
   parsedStep: ParsedStep,
   error: Error,
   pages: PageKnowledge[],
+  appConfig: AppConfig,
   onEvent: (e: AgentEvent) => void,
   tcId: string,
   stepIndex: number,
   attempt: number,
-  previouslyTriedLocator?: string,
+  triedLocators: string[] = [],
 ): Promise<string | null> {
-  onEvent({ type: 'step_heal', tcId, stepIndex, attempt, rationale: 'Analyzing live page DOM for a working locator…' })
+  const { cls: errorClass, matchCount } = classifyError(error)
+  onEvent({ type: 'step_heal', tcId, stepIndex, attempt, rationale: `Analyzing (error: ${errorClass})…` })
 
   try {
-    const ariaStr = await getAriaSnapshot(page)
+    const [ariaStr, elementContext] = await Promise.all([
+      getAriaSnapshot(page),
+      // Extract DOM context for the target element — essential for strict mode and not_found
+      (errorClass === 'strict_mode' || errorClass === 'not_found')
+        ? extractElementContext(page, parsedStep.target)
+        : Promise.resolve(''),
+    ])
+
+    const instructions = mergeInstructions(appConfig)
+
+    const triedStr = triedLocators.length > 0
+      ? triedLocators.map((l, i) => `${i + 1}. ${l}`).join('\n')
+      : '(none)'
+
+    // Build error-class-specific advice for the LLM
+    const errorAdvice = buildErrorAdvice(errorClass, matchCount, parsedStep.target)
 
     const prompt = fillPrompt('step-healer', {
       step,
       action_json: JSON.stringify(parsedStep),
-      error: error.message,
+      error: error.message.slice(0, 300),
+      error_class: errorAdvice,
       current_url: page.url(),
       aria_snapshot: ariaStr,
+      element_context: elementContext || '(not extracted)',
       known_locators: formatLocatorsForCurrentPage(pages, page.url()),
-      previously_tried: previouslyTriedLocator || '(none)',
+      previously_tried: triedStr,
+      custom_instructions: instructions,
     })
 
-    const raw = await callLLM(prompt, 'You are a Playwright expert. Return JSON only with a working locator expression.')
+    const raw = await callLLM(
+      prompt,
+      `You are a senior QA automation engineer and Playwright expert. Think like a human: classify the failure, look at context, generate the most specific locator that will uniquely match the target.\n${instructions}\nReturn JSON only.`
+    )
     const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
     const match = cleaned.match(/\{[\s\S]*\}/)
     if (!match) return null
 
     const result = JSON.parse(match[0]) as { locator: string; rationale: string }
 
+    if (triedLocators.includes(result.locator)) {
+      onEvent({ type: 'step_heal', tcId, stepIndex, attempt, rationale: `LLM repeated already-tried locator "${result.locator}" — discarded` })
+      return null
+    }
+
     try {
       const resolved = resolveLocatorString(page, result.locator)
       const count = await resolved.count()
+
       if (count === 0) {
-        onEvent({ type: 'step_heal', tcId, stepIndex, attempt, rationale: `LLM suggested "${result.locator}" but 0 elements found — discarded` })
+        triedLocators.push(result.locator)
+        onEvent({ type: 'step_heal', tcId, stepIndex, attempt, rationale: `"${result.locator}" → 0 elements — discarded` })
         return null
       }
+
+      // Strict mode: locator matches multiple elements — try auto-scoping with .first() as last resort
+      if (count > 1) {
+        const firstLocator = result.locator.replace(/\)$/, ').first()')
+        onEvent({ type: 'step_heal', tcId, stepIndex, attempt, rationale: `"${result.locator}" → ${count} elements — auto-scoping to .first()` })
+        triedLocators.push(result.locator)
+        return firstLocator
+      }
     } catch {
+      triedLocators.push(result.locator)
       return null
     }
 
@@ -708,6 +864,45 @@ async function healStep(
     return result.locator
   } catch {
     return null
+  }
+}
+
+function buildErrorAdvice(cls: ErrorClass, matchCount: number | undefined, target: string): string {
+  switch (cls) {
+    case 'strict_mode':
+      return `STRICT MODE — locator matched ${matchCount ?? 'multiple'} elements for "${target}". The locator is too broad. You MUST scope it:\n` +
+        `  Option A: Use a CSS ancestor → page.locator('.product-details a.cart') or page.locator('li:has-text("${target}") button')\n` +
+        `  Option B: Use has-text on ancestor → page.locator('section:has-text("unique heading")').getByRole('button',{name:'${target}'})\n` +
+        `  Option C: Add .nth(0) only if ordering is deterministic — page.getByRole('link',{name:'${target}'}).nth(0)`
+
+    case 'not_found':
+      return `NOT FOUND — 0 elements matched for "${target}". Try a fundamentally different locator type:\n` +
+        `  - If element is a link acting as button: page.locator('a:has-text("${target}")') or page.locator('a.classname')\n` +
+        `  - If element has data-testid: page.locator('[data-testid*="${target.toLowerCase().replace(/\s+/g, '-')}"]')\n` +
+        `  - If element has aria-label: page.locator('[aria-label*="${target}"]')\n` +
+        `  - Check element_context below — the DOM parent and CSS class reveal the right selector`
+
+    case 'not_visible':
+      return `NOT VISIBLE — element exists but is hidden or off-screen for "${target}".\n` +
+        `  - The element may be in a collapsed accordion/tab — check if a parent needs clicking first\n` +
+        `  - Return the SAME locator but action should scroll: the executor will scrollIntoViewIfNeeded\n` +
+        `  - If behind an overlay/modal, the overlay must be dismissed first\n` +
+        `  - If inside a dropdown: the dropdown trigger must be clicked first`
+
+    case 'not_interactable':
+      return `NOT INTERACTABLE — element is visible but disabled/covered for "${target}".\n` +
+        `  - Element may be disabled — check if a prerequisite step is missing\n` +
+        `  - Element may be covered by an overlay — look for z-index elements in ARIA\n` +
+        `  - Try force-clicking: add "force":true to the action\n` +
+        `  - Look for a sibling/nearby element that is the actual interactive target`
+
+    case 'timeout':
+      return `TIMEOUT — page may still be loading or element appears after user action.\n` +
+        `  - Return action:"wait" with target:"networkidle" if page is loading\n` +
+        `  - Or return the correct locator — executor will retry with longer timeout`
+
+    default:
+      return `UNKNOWN ERROR — analyze the error message and ARIA snapshot to determine the right fix.`
   }
 }
 
@@ -1057,6 +1252,8 @@ export async function playwrightMcpAgent(
           let stepError: Error | null = null
           let healingAttempts = 0
           let usedLocator = parsed.locator || indexedLocator(parsed.target, locatorIndex) || undefined
+          // Track ALL tried/discarded locators so healer doesn't repeat them
+          const triedLocators: string[] = usedLocator ? [usedLocator] : []
 
           // Up to 3 attempts: primary + 2 LLM heals
           for (let attempt = 0; attempt < 3; attempt++) {
@@ -1068,13 +1265,14 @@ export async function playwrightMcpAgent(
               stepError = err instanceof Error ? err : new Error(String(err))
               if (attempt < 2) {
                 const healed = await healStep(
-                  page, step, parsed, stepError, pages, onEvent,
-                  tc.id, i, attempt + 1, usedLocator,
+                  page, step, parsed, stepError, pages, appConfig, onEvent,
+                  tc.id, i, attempt + 1, triedLocators,
                 )
                 if (healed) {
                   parsed = { ...parsed, locator: healed }
                   parsedStepsCache[i] = parsed
                   usedLocator = healed
+                  triedLocators.push(healed)
                   healingAttempts++
                 }
               }

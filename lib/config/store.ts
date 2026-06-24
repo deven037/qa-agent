@@ -21,6 +21,7 @@ export interface AppConfig {
   credentialEnvVars: Record<string, string>
   storePassword?: string
   playwrightTestsDir: string
+  automationInstructions?: string
   createdAt: string
 }
 
@@ -48,6 +49,7 @@ function docToAppConfig(doc: any): AppConfig {
       : (doc.credentialEnvVars ?? {}),
     storePassword: doc.storePassword,
     playwrightTestsDir: doc.playwrightTestsDir,
+    automationInstructions: doc.automationInstructions ?? '',
     createdAt: doc.createdAt,
   }
 }
@@ -103,6 +105,29 @@ export async function regenerateRunnerToken(): Promise<string> {
   const token = randomBytes(32).toString('hex')
   await RunnerConfigModel.findOneAndUpdate({}, { token }, { upsert: true, new: true })
   return token
+}
+
+// Returns a human-readable credential block for LLM prompts.
+// Never returns empty — always describes what auth strategy is in use.
+export function formatCredentialsForLLM(app: AppConfig): string {
+  const creds = app.credentials ?? {}
+  if (app.authStrategy === 'email-password') {
+    const username = creds.email || creds.username || creds.loginname || ''
+    const password = creds.password || ''
+    if (!username && !password) return '(no credentials configured — add them in Settings)'
+    const lines = ['Auth: email/password']
+    if (username) lines.push(`Username / Email: ${username}`)
+    if (password) lines.push(`Password: ${password}`)
+    return lines.join('\n')
+  }
+  if (app.authStrategy === 'api-key') {
+    return creds.apiKey ? `Auth: API key\nAPI Key: ${creds.apiKey}` : '(API key not set)'
+  }
+  if (app.authStrategy === 'no-auth') return 'Auth: none required'
+  if (Object.keys(creds).length > 0) {
+    return 'Auth credentials:\n' + Object.entries(creds).map(([k, v]) => `  ${k}: ${v}`).join('\n')
+  }
+  return '(no credentials configured)'
 }
 
 export async function isConfigured(): Promise<boolean> {

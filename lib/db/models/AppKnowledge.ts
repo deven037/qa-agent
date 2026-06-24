@@ -9,6 +9,8 @@ export interface UIElement {
   htmlName: string | null
   htmlId: string | null
   locators: {
+    byTestId: string | null     // data-testid / data-cy — highest priority
+    byId: string | null         // #id selector
     getByRole: string | null
     getByLabel: string | null
     getByPlaceholder: string | null

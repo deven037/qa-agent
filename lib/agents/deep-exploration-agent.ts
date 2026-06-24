@@ -2,14 +2,17 @@ import { chromium, Browser, BrowserContext, Page } from 'playwright'
 import { AppConfig } from '@/lib/config/store'
 import { PageKnowledge, AppForm, FormField, UIElement } from '@/lib/db/models/AppKnowledge'
 
-const MAX_PAGES = 60
-const PARALLEL = 3
+// No practical page limit — crawl the full application.
+// 500 is a safety ceiling only, to prevent infinite loops on sites with generated URLs (pagination, search params).
+const MAX_PAGES = 500
+const PARALLEL = 5
 
-function inferModule(path: string): PageKnowledge['module'] {
-  if (/login|signin|sign-in|auth|password/.test(path)) return 'auth'
-  if (/cart|checkout|payment|order/.test(path)) return 'checkout'
-  if (/account|profile|dashboard|settings/.test(path)) return 'account'
-  if (/product|item|catalog|shop|collection|category/.test(path)) return 'catalog'
+function inferModule(path: string, title = ''): PageKnowledge['module'] {
+  const haystack = (path + ' ' + title).toLowerCase()
+  if (/login|signin|sign-in|auth|password|register|signup/.test(haystack)) return 'auth'
+  if (/cart|checkout|payment|order|billing/.test(haystack)) return 'checkout'
+  if (/account|profile|dashboard|settings|wishlist|wish.list/.test(haystack)) return 'account'
+  if (/product|item|catalog|shop|collection|category/.test(haystack)) return 'catalog'
   return 'other'
 }
 
@@ -25,6 +28,8 @@ function skipUrl(url: string): boolean {
 
 function buildLocators(role: string | null, name: string | null, label: string | null, placeholder: string | null, htmlName?: string | null): UIElement['locators'] {
   return {
+    byTestId: null,
+    byId: null,
     getByRole: role && name ? `page.getByRole('${role}', { name: '${name.replace(/'/g, "\\'")}' })` : null,
     getByLabel: label ? `page.getByLabel('${label.replace(/'/g, "\\'")}')` : null,
     getByPlaceholder: placeholder ? `page.getByPlaceholder('${placeholder.replace(/'/g, "\\'")}')` : null,
@@ -36,7 +41,9 @@ function buildLocators(role: string | null, name: string | null, label: string |
 async function capturePage(page: Page): Promise<PageKnowledge> {
   const url = page.url()
   const title = await page.title()
-  const path = new URL(url).pathname
+  const parsedUrl = new URL(url)
+  // Store full path + query so query-param routed apps (e.g. ?rt=account/login) are distinguishable
+  const path = parsedUrl.search ? parsedUrl.pathname + parsedUrl.search : parsedUrl.pathname
 
   // Scroll to bottom to trigger lazy-loaded content, then back to top
   try {
@@ -51,8 +58,10 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
     // Buttons
     const buttons: UIElement[] = Array.from(
       document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')
-    ).slice(0, 30).map((el) => {
+    ).slice(0, 100).map((el) => {
       const text = trim((el as HTMLElement).innerText || (el as HTMLInputElement).value || el.getAttribute('aria-label'))
+      const testId = trim(el.getAttribute('data-testid') || el.getAttribute('data-cy') || el.getAttribute('data-test') || el.getAttribute('data-qa'))
+      const elId = el.id || null
       return {
         role: 'button',
         name: text,
@@ -60,8 +69,10 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
         placeholder: null,
         inputType: null,
         htmlName: (el as HTMLInputElement).name || null,
-        htmlId: el.id || null,
+        htmlId: elId,
         locators: {
+          byTestId: testId ? `page.locator('[data-testid="${testId}"]')` : null,
+          byId: elId ? `page.locator('#${elId}')` : null,
           getByRole: text ? `page.getByRole('button', { name: '${text?.replace(/'/g, "\\'")}' })` : null,
           getByLabel: null,
           getByPlaceholder: null,
@@ -71,19 +82,50 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
       }
     }).filter((b) => b.name)
 
+    // Onclick links — <a> tags that submit forms or trigger JS (not navigation links)
+    // These are interactive elements that should be locatable like buttons
+    const onclickLinks: UIElement[] = Array.from(
+      document.querySelectorAll('a[onclick], a[href="javascript:void(0)"], a[href="#"]')
+    ).slice(0, 50).map((el) => {
+      const text = trim((el as HTMLElement).innerText || el.getAttribute('aria-label'))
+      const cssClasses = Array.from(el.classList).filter(c => !/^(fa|icon|glyphicon)/.test(c))
+      const primaryClass = cssClasses[0] || null
+      const testId = trim(el.getAttribute('data-testid') || el.getAttribute('data-cy'))
+      const elId = el.id || null
+      return {
+        role: 'link',
+        name: text,
+        label: null,
+        placeholder: null,
+        inputType: null,
+        htmlName: null,
+        htmlId: elId,
+        locators: {
+          byTestId: testId ? `page.locator('[data-testid="${testId}"]')` : null,
+          byId: elId ? `page.locator('#${elId}')` : null,
+          getByRole: null,
+          getByLabel: null,
+          getByPlaceholder: null,
+          getByText: text ? `page.locator('a:has-text("${text?.replace(/"/g, '\\"')}")')` : null,
+          // CSS class is the most reliable for onclick links (e.g. a.cart, a.wishlist)
+          byName: primaryClass ? `page.locator('a.${primaryClass}')` : null,
+        },
+      }
+    }).filter((b) => b.name)
+
     // Links
-    const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 60).map((el) => {
+    const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 200).map((el) => {
       const anchor = el as HTMLAnchorElement
       return { text: trim((el as HTMLElement).innerText || el.getAttribute('aria-label')) || '', href: anchor.href, path: new URL(anchor.href, location.href).pathname }
     }).filter((l) => l.text && l.href && !l.href.startsWith('javascript:'))
 
     // Forms — also capture aria-label and aria-describedby for React/MUI/Chakra apps
-    const forms: AppForm[] = Array.from(document.querySelectorAll('form')).slice(0, 5).map((form, fi) => {
+    const forms: AppForm[] = Array.from(document.querySelectorAll('form')).slice(0, 15).map((form, fi) => {
       const nearbyHeading = form.closest('section,div')?.querySelector('h1,h2,h3,h4')
       const formName = trim((nearbyHeading as HTMLElement)?.innerText) || `Form #${fi + 1}`
       const action = form.action || null
       const inputs = Array.from(form.querySelectorAll('input:not([type="hidden"]), textarea, select'))
-      const fields: FormField[] = inputs.slice(0, 20).map((el) => {
+      const fields: FormField[] = inputs.slice(0, 50).map((el) => {
         const input = el as HTMLInputElement
         const id = input.id || ''
         const labelEl = id ? document.querySelector(`label[for="${id}"]`) : el.closest('label') || el.previousElementSibling
@@ -95,8 +137,14 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
         const describedByText = describedById
           ? trim(document.getElementById(describedById.split(' ')[0])?.textContent)
           : null
-        const role = el.tagName === 'SELECT' ? 'combobox' : 'textbox'
+        const testId = trim(input.getAttribute('data-testid') || input.getAttribute('data-cy') || input.getAttribute('data-test') || input.getAttribute('data-qa'))
+        const role = el.tagName === 'SELECT' ? 'combobox' : input.type === 'checkbox' ? 'checkbox' : input.type === 'radio' ? 'radio' : 'textbox'
         const name = labelText || trim(input.placeholder) || trim(input.name)
+        // Capture select options for dropdown assertion hints
+        const selectOptions = el.tagName === 'SELECT'
+          ? Array.from((el as HTMLSelectElement).options).map(o => o.text.trim()).filter(t => t && t !== '--' && t !== 'Select')
+          : []
+        const tagForLocator = el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : 'input'
         return {
           role,
           name,
@@ -106,15 +154,16 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
           htmlName: trim(input.name),
           htmlId: id || null,
           required: input.required || input.getAttribute('aria-required') === 'true',
-          // Pre-populate validationMessages with describedByText if it looks like an error hint
           validationMessages: describedByText ? [describedByText] : [],
+          selectOptions,
           locators: {
+            byTestId: testId ? `page.locator('[data-testid="${testId}"]')` : null,
+            byId: id ? `page.locator('#${id}')` : null,
             getByRole: role && name ? `page.getByRole('${role}', { name: '${name?.replace(/'/g, "\\'")}' })` : null,
-            // Prefer the explicit aria-label from React components; fall back to visible <label> text
             getByLabel: labelText ? `page.getByLabel('${labelText.replace(/'/g, "\\'")}')` : null,
             getByPlaceholder: input.placeholder ? `page.getByPlaceholder('${input.placeholder.replace(/'/g, "\\'")}')` : null,
             getByText: null,
-            byName: input.name ? `page.locator('input[name="${input.name}"]')` : null,
+            byName: input.name ? `page.locator('${tagForLocator}[name="${input.name}"]')` : null,
           },
         }
       })
@@ -129,7 +178,7 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
     })
 
     // Headings
-    const headings = Array.from(document.querySelectorAll('h1,h2,h3')).slice(0, 10)
+    const headings = Array.from(document.querySelectorAll('h1,h2,h3')).slice(0, 20)
       .map((el) => trim((el as HTMLElement).innerText)).filter(Boolean) as string[]
 
     // Visible text sample
@@ -137,9 +186,9 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
       .map((el) => trim((el as HTMLElement).innerText))
       .filter((t): t is string => !!(t && t.length > 3 && t.length < 120))
       .filter((v, i, a) => a.indexOf(v) === i)
-      .slice(0, 30)
+      .slice(0, 60)
 
-    return { buttons, links, forms, headings, visibleTextSample }
+    return { buttons: [...buttons, ...onclickLinks], links, forms, headings, visibleTextSample }
   })
 
   // Expand <details> elements only — safe because they cannot trigger navigation
@@ -209,7 +258,7 @@ async function capturePage(page: Page): Promise<PageKnowledge> {
     url,
     path,
     title,
-    module: inferModule(path),
+    module: inferModule(path, title),
     headings: data.headings,
     buttons: data.buttons,
     links: data.links,
@@ -422,14 +471,18 @@ async function crawlPage(
   appConfig: AppConfig,
   onLog: (s: string) => void
 ): Promise<PageKnowledge | null> {
-  if (visited.has(url)) return null
-  visited.add(url)
-
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 })
     // Wait for JS/SPA rendering to settle — networkidle signals data fetching is done
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {})
     await page.waitForTimeout(400)
+
+    // If the page redirected, mark the final URL visited too — prevents crawling the same redirect target repeatedly
+    const finalUrl = page.url()
+    if (finalUrl !== url) {
+      if (visited.has(finalUrl)) return null
+      visited.add(finalUrl)
+    }
 
     const snap = await capturePage(page)
     onLog(`[DeepCrawl] ${snap.path} — "${snap.title}" (${snap.forms.length} forms, ${snap.buttons.length} buttons)\n`)
@@ -463,14 +516,14 @@ async function crawlPage(
 export async function deepExplorationAgent(
   appConfig: AppConfig,
   onLog: (line: string) => void,
-  maxPages = MAX_PAGES
+  signal?: AbortSignal
 ): Promise<PageKnowledge[]> {
   const baseUrl = appConfig.baseUrl.replace(/\/$/, '')
   const visited = new Set<string>()
   const queue: string[] = [baseUrl]
   const pages: PageKnowledge[] = []
 
-  onLog(`[DeepCrawl] Starting deep crawl of ${baseUrl} (max ${maxPages} pages)\n`)
+  onLog(`[DeepCrawl] Starting full crawl of ${baseUrl} — exploring all reachable pages\n`)
 
   const browser: Browser = await chromium.launch({ headless: true })
   const ctx: BrowserContext = await browser.newContext({
@@ -532,8 +585,14 @@ export async function deepExplorationAgent(
     await loginPage.close()
 
     // BFS with parallel pages
-    while (queue.length > 0 && pages.length < maxPages) {
+    while (queue.length > 0 && pages.length < MAX_PAGES) {
+      if (signal?.aborted) {
+        onLog(`[DeepCrawl] Crawl cancelled by user\n`)
+        break
+      }
       const batch = queue.splice(0, PARALLEL).filter((u) => !visited.has(u))
+      // Mark the whole batch visited BEFORE parallel work starts — prevents two workers crawling the same URL
+      batch.forEach((u) => visited.add(u))
       if (batch.length === 0) continue
 
       const batchPages = await Promise.all(

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Loader2, Save, Trash2, ChevronDown, FolderPlus } from 'lucide-react'
+import { Loader2, Save, Trash2, ChevronDown, FolderPlus, BrainCircuit } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 function toJiraKey(name: string): string {
@@ -42,6 +42,8 @@ export default function SettingsPage() {
   const [syncingTypes, setSyncingTypes] = useState(false)
   const [syncingFields, setSyncingFields] = useState(false)
   const [editingKey, setEditingKey] = useState(false)
+  const [automationInstructions, setAutomationInstructions] = useState('')
+  const [savingInstructions, setSavingInstructions] = useState(false)
 
   const [form, setForm] = useState<AppForm>({
     name: '',
@@ -66,6 +68,7 @@ export default function SettingsPage() {
           password: app.credentials?.password ?? '',
           apiKey: app.credentials?.apiKey ?? '',
         })
+        setAutomationInstructions(app.automationInstructions ?? '')
       })
       .catch(() => toast.error('Failed to load app settings'))
       .finally(() => setLoading(false))
@@ -111,6 +114,23 @@ export default function SettingsPage() {
       toast.error(e instanceof Error ? e.message : 'Failed to save')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSaveInstructions() {
+    setSavingInstructions(true)
+    try {
+      const res = await fetch(`/api/apps/${appId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ automationInstructions }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      toast.success('AI instructions saved')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save instructions')
+    } finally {
+      setSavingInstructions(false)
     }
   }
 
@@ -473,6 +493,38 @@ export default function SettingsPage() {
               />
             </Field>
           )}
+        </div>
+      </section>
+
+      {/* AI Instructions */}
+      <section className="bg-white rounded-xl border border-violet-200 divide-y divide-slate-100">
+        <div className="px-6 py-4 flex items-center gap-2">
+          <BrainCircuit className="w-4 h-4 text-violet-500" />
+          <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">AI Instructions</h2>
+          <span className="ml-auto text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Optional</span>
+        </div>
+        <div className="px-6 py-5 space-y-3">
+          <p className="text-xs text-slate-500">
+            Global automation rules are <span className="text-violet-600 font-medium">always active</span>. Add overrides here to teach the AI about this app&apos;s specific locators, quirks, login flows, or test data.
+          </p>
+          <textarea
+            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent font-mono resize-y min-h-[160px] placeholder:text-slate-400 placeholder:font-sans"
+            value={automationInstructions}
+            onChange={(e) => setAutomationInstructions(e.target.value)}
+            placeholder={`## App-Specific Overrides\n\n- Email field: input[name="txtEmail"]\n- Login URL: /g8trainingprod3/login/login\n- After login, wait for URL to contain /dashboard\n- CAPTCHA appears on the staging environment — report and stop`}
+          />
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Markdown supported. Merged on top of global rules at runtime.</p>
+            <Button
+              onClick={handleSaveInstructions}
+              disabled={savingInstructions}
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+              size="sm"
+            >
+              {savingInstructions ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
+              Save Instructions
+            </Button>
+          </div>
         </div>
       </section>
 

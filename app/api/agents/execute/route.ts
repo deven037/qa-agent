@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server'
+import { nanoid } from 'nanoid'
 import { auth } from '@/auth'
 import { readApps } from '@/lib/config/store'
 import { fetchJiraIssue, postJiraComment, extractPlaywrightScript, savePlaywrightScript } from '@/lib/jira/client'
@@ -8,6 +9,8 @@ import { playwrightMcpAgent, replaySavedScript, AgentEvent, ExecutionResult, Res
 import { planStepsFromInstruction } from '@/lib/agents/step-planner'
 import { compileScript } from '@/lib/agents/script-compiler'
 import { createJob, subscribeToJob, JobSignal } from '@/lib/runner/job-store'
+import { TestRun, StepRecord, NavEvent } from '@/lib/db/models/TestRun'
+import dbConnect from '@/lib/db/mongoose'
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -62,9 +65,84 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder()
-      const sendEvent = (event: AgentEvent) =>
+
+      // ── Event capture for report ─────────────────────────────────────────────
+      const steps: StepRecord[] = []
+      const navEvents: NavEvent[] = []
+      let currentStep: StepRecord | null = null
+
+      const sendEvent = (event: AgentEvent) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+
+        switch (event.type) {
+          case 'step_start':
+            currentStep = {
+              stepIndex: event.stepIndex ?? steps.length,
+              description: event.step ?? '',
+              status: 'failed',
+              locatorAttempts: [],
+              healingAttempts: 0,
+            }
+            break
+          case 'dom_inspect':
+            if (currentStep) { currentStep.pageUrl = event.url; currentStep.domFieldCount = event.fieldCount }
+            break
+          case 'llm_response':
+            if (currentStep) { currentStep.action = event.action; currentStep.resolvedLocator = event.locator }
+            break
+          case 'locator_try':
+            if (currentStep && event.locator != null) {
+              currentStep.locatorAttempts.push({ locator: event.locator, success: event.success ?? false })
+            }
+            break
+          case 'step_heal':
+            if (currentStep) {
+              currentStep.healingAttempts = event.attempt ?? currentStep.healingAttempts + 1
+              if (event.rationale) currentStep.healingRationale = event.rationale
+            }
+            break
+          case 'step_done':
+            if (currentStep) {
+              currentStep.status = event.status ?? 'failed'
+              currentStep.duration = event.duration
+              currentStep.error = event.error
+              steps.push(currentStep)
+              currentStep = null
+            }
+            break
+          case 'nav':
+            if (event.url) navEvents.push({ url: event.url, stepIndex: currentStep?.stepIndex ?? -1 })
+            break
+        }
+      }
       const log = (text: string) => sendEvent({ type: 'log', text })
+
+      const saveRun = async (result: ExecutionResult, issueKey?: string, title?: string, browser = 'chromium') => {
+        try {
+          await dbConnect
+          const runId = nanoid(12)
+          await TestRun.create({
+            runId,
+            appId,
+            issueKey,
+            title: title ?? (freeform ? instruction.slice(0, 120) : issueKey ?? 'Unknown'),
+            status: result.failed > 0 ? 'failed' : 'passed',
+            passed: result.passed,
+            failed: result.failed,
+            skipped: result.skipped ?? 0,
+            duration: result.duration,
+            steps,
+            navEvents,
+            browser,
+            runner: 'server',
+            executedAt: new Date(),
+            createdAt: new Date(),
+          })
+          controller.enqueue(encoder.encode(`data: [RUN_ID] ${runId}\n\n`))
+        } catch (e) {
+          log(`Report save failed (non-fatal): ${String(e)}`)
+        }
+      }
 
       try {
         let testCases: TestCase[]
@@ -90,6 +168,7 @@ export async function POST(req: NextRequest) {
 
           log(`Plan ready — ${plannedSteps.length} step(s). Starting execution…`)
           const result = await playwrightMcpAgent(testCases, app, relevantPages, sendEvent, { browser, instructions, headed })
+          await saveRun(result, undefined, instruction.slice(0, 120), String(browser))
           controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
         } else {
           log(`Loading issue ${issueKey} from Jira…`)
@@ -144,9 +223,11 @@ export async function POST(req: NextRequest) {
               const fallbackResult = await playwrightMcpAgent(testCasesFallback, app, relevantPages, sendEvent, { browser, instructions, headed })
               await saveAndPostScript(issueKey, issue.summary, fallbackResult, issue.comments, sendEvent, log)
               await postJiraComment(issueKey, buildJiraResults(issueKey, fallbackResult))
+              await saveRun(fallbackResult, issueKey, issue.summary, String(browser))
               controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(fallbackResult)}\n\n`))
             } else {
               await postJiraComment(issueKey, buildJiraResults(issueKey, result))
+              await saveRun(result, issueKey, issue.summary, String(browser))
               log('Results posted to Jira.')
               controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
             }
@@ -176,6 +257,7 @@ export async function POST(req: NextRequest) {
             }
 
             await postJiraComment(issueKey, buildJiraResults(issueKey, result))
+            await saveRun(result, issueKey, issue.summary, String(browser))
             log('Results posted to Jira.')
             controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
           }

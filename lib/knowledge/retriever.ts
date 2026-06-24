@@ -79,14 +79,52 @@ export async function inferRelevantPages(appId: string, text: string, topK = 5):
   return combined.slice(0, topK + 2)
 }
 
+// Compact inventory used by the scenario generator — real paths + element names only
+export function getPageInventory(pages: PageKnowledge[]): string {
+  if (pages.length === 0) return '(no pages crawled — run knowledge base crawl first)'
+
+  return pages.map((page) => {
+    const lines: string[] = [`[${page.module.toUpperCase()}] "${page.title}" → path: ${page.path}`]
+
+    for (const form of page.forms) {
+      const fields = form.fields
+        .filter((f) => f.label || f.placeholder || f.htmlName)
+        .map((f) => `"${f.label || f.placeholder || f.htmlName}"`)
+      if (fields.length) lines.push(`  Fields: ${fields.join(', ')}`)
+      if (form.submitButtonLocator) {
+        const btn = form.submitButtonLocator.match(/name:\s*['"](.+?)['"]/)?.[1]
+        if (btn) lines.push(`  Submit: "${btn}"`)
+      }
+    }
+
+    const actionBtns = page.buttons
+      .filter((b) => b.name && !/back to top|scroll|share|print|close|dismiss/i.test(b.name))
+      .slice(0, 5)
+      .map((b) => `"${b.name}"`)
+    if (actionBtns.length) lines.push(`  Buttons/Links: ${actionBtns.join(', ')}`)
+
+    const navLinks = page.links
+      ?.filter((l) => l.text && l.path && !l.path.includes('javascript'))
+      .slice(0, 5)
+      .map((l) => `"${l.text}" → ${l.path}`)
+    if (navLinks?.length) lines.push(`  Nav links: ${navLinks.join(' | ')}`)
+
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
 export function getPageContext(pages: PageKnowledge[]): string {
   if (pages.length === 0) return ''
 
-  const lines: string[] = ['=== APP UI KNOWLEDGE (use field names and validation messages verbatim) ===', '']
+  const lines: string[] = [
+    '=== APP UI KNOWLEDGE ===',
+    'Use these field names, button labels, and paths verbatim in your steps.',
+    'DO NOT generate steps for elements listed here unless the scenario explicitly requires them.',
+    '',
+  ]
 
   for (const page of pages) {
-    lines.push(`Page: "${page.title}" (${page.path}) — module: ${page.module}`)
-    if (page.headings.length) lines.push(`  Headings: ${page.headings.join(' | ')}`)
+    lines.push(`Page: "${page.title}" — path: ${page.path} (${page.module})`)
 
     for (const form of page.forms) {
       const namedFields = form.fields.filter((f) => f.label || f.placeholder || f.htmlName)
@@ -96,22 +134,25 @@ export function getPageContext(pages: PageKnowledge[]): string {
         const name = field.label || field.placeholder || field.htmlName || '(unnamed)'
         const type = field.inputType || 'text'
         const req = field.required ? ' [required]' : ''
-        lines.push(`    • ${name} (${type})${req}`)
+        lines.push(`    • Field: "${name}" (${type})${req}`)
         if (field.validationMessages.length) {
-          lines.push(`      Validation errors: ${field.validationMessages.join(' | ')}`)
+          lines.push(`      Validation: ${field.validationMessages.join(' | ')}`)
         }
       }
-      if (form.submitButtonLocator) lines.push(`    Submit: ${form.submitButtonLocator}`)
+      if (form.submitButtonLocator) {
+        const btnName = form.submitButtonLocator.match(/name:\s*['"](.+?)['"]/)?.[1] || 'Submit'
+        lines.push(`    • Submit button: "${btnName}"`)
+      }
     }
 
-    if (page.buttons.length) {
-      const btns = page.buttons.slice(0, 8).map((b) => b.name).filter(Boolean).join(' | ')
-      lines.push(`  Buttons: ${btns}`)
+    // Only show buttons directly relevant to actions (not nav/utility buttons)
+    const actionButtons = page.buttons
+      .filter((b) => b.name && !/back to top|scroll|share|print|close|dismiss/i.test(b.name))
+      .slice(0, 6)
+    if (actionButtons.length) {
+      lines.push(`  Action buttons: ${actionButtons.map((b) => `"${b.name}"`).join(', ')}`)
     }
 
-    if (page.visibleTextSample.length) {
-      lines.push(`  Visible text sample: ${page.visibleTextSample.slice(0, 10).join(' | ')}`)
-    }
     lines.push('')
   }
 

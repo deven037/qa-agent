@@ -1,5 +1,6 @@
 import { callSmartLLM } from '@/lib/ai/gemini'
-import { fillPrompt } from '@/lib/prompts/loader'
+import { fillPrompt, loadGlobalInstructions } from '@/lib/prompts/loader'
+import { formatCredentialsForLLM } from '@/lib/config/store'
 import type { AgentEvent } from './playwright-mcp-agent'
 import type { AppConfig } from '@/lib/config/store'
 import type { PageKnowledge } from '@/lib/db/models/AppKnowledge'
@@ -24,17 +25,23 @@ export async function planStepsFromInstruction(
     ((p as any).forms || []).flatMap((f: any) => (f.fields || []).map((field: any) => field.name || field.label || ''))
   ).filter(Boolean).slice(0, 20).join(', ') || '(unknown)'
 
+  const globalInstructions = loadGlobalInstructions()
+  const perApp = appConfig.automationInstructions?.trim()
+  const instructions = perApp ? `${globalInstructions}\n\n## App-Specific Overrides\n${perApp}` : globalInstructions
+
   const prompt = fillPrompt('step-planner', {
     instruction,
     base_url: appConfig.baseUrl,
     known_paths: knownPaths,
     known_fields: knownFields,
+    app_credentials: formatCredentialsForLLM(appConfig),
+    custom_instructions: instructions,
   })
 
   try {
     const raw = await callSmartLLM(
       prompt,
-      'You are a QA automation expert. Return a JSON array of test steps only. No markdown fences.',
+      `You are an expert QA automation engineer.\n${instructions}\nReturn a JSON array of test steps only. No markdown fences.`,
     )
     const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
     const match = cleaned.match(/\[[\s\S]*\]/)

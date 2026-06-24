@@ -2,15 +2,30 @@ import { PageKnowledge } from '@/lib/db/models/AppKnowledge'
 
 export function formatPagesForParsing(pages: PageKnowledge[]): string {
   if (pages.length === 0) return '(no page knowledge available)'
-  return pages
-    .map((p) => {
-      const fields = p.forms
-        .flatMap((f) => f.fields.map((field) => field.label || field.placeholder || field.htmlName || ''))
-        .filter(Boolean)
-      const fieldStr = fields.length > 0 ? ` — fields: ${fields.join(', ')}` : ''
-      return `- ${p.path}: ${p.title} (${p.module})${fieldStr}`
-    })
-    .join('\n')
+  return pages.map((p) => {
+    const lines: string[] = [`[${p.module.toUpperCase()}] ${p.title} — ${p.path}`]
+    for (const form of p.forms) {
+      for (const field of form.fields) {
+        const name = field.label || field.placeholder || field.htmlName || ''
+        if (!name) continue
+        // Best locator in priority order: testId > id > name attr > label > placeholder > role
+        const loc = field.locators.byTestId || field.locators.byId || field.locators.byName
+          || field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole
+        const type = field.inputType ? ` [${field.inputType}]` : ''
+        const req = field.required ? ' *' : ''
+        lines.push(`  ${name}${type}${req} → ${loc || '(no locator)'}`)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const opts = (field as any).selectOptions as string[] | undefined
+        if (opts?.length) lines.push(`    options: ${opts.slice(0, 10).join(', ')}`)
+      }
+      if (form.submitButtonLocator) lines.push(`  [submit] → ${form.submitButtonLocator}`)
+    }
+    for (const btn of p.buttons.slice(0, 6)) {
+      const loc = btn.locators.byTestId || btn.locators.byId || btn.locators.getByRole || btn.locators.getByText
+      if (btn.name && loc) lines.push(`  [btn] ${btn.name} → ${loc}`)
+    }
+    return lines.join('\n')
+  }).join('\n\n')
 }
 
 export function formatLocatorsForCurrentPage(pages: PageKnowledge[], currentUrl: string): string {
@@ -19,8 +34,23 @@ export function formatLocatorsForCurrentPage(pages: PageKnowledge[], currentUrl:
   try {
     const url = new URL(currentUrl)
     const currentPath = url.pathname
-    const matching = pages.filter((p) => p.path === currentPath || currentPath.startsWith(p.path))
-    if (matching.length > 0) targetPages = matching
+    const currentQuery = url.search // e.g. "?rt=account/login"
+
+    // Try full URL match first (for query-param routed apps like ?rt=...)
+    const fullMatch = pages.filter((p) => {
+      try {
+        const pu = new URL(p.path.startsWith('http') ? p.path : `http://x${p.path}`)
+        return pu.pathname === currentPath && pu.search === currentQuery
+      } catch { return false }
+    })
+
+    if (fullMatch.length > 0) {
+      targetPages = fullMatch
+    } else {
+      // Fall back to pathname match
+      const pathMatch = pages.filter((p) => p.path === currentPath || currentPath.startsWith(p.path))
+      if (pathMatch.length > 0) targetPages = pathMatch
+    }
   } catch {
     // keep all pages if URL is unparseable
   }
@@ -30,7 +60,8 @@ export function formatLocatorsForCurrentPage(pages: PageKnowledge[], currentUrl:
     for (const form of p.forms) {
       for (const field of form.fields) {
         const name = field.label || field.placeholder || field.htmlName
-        const best = field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole || field.locators.byName
+        const best = field.locators.byTestId || field.locators.byId || field.locators.byName
+          || field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole
         if (name && best) lines.push(`${name} → ${best}`)
       }
       if (form.submitButtonLocator) {
@@ -41,7 +72,7 @@ export function formatLocatorsForCurrentPage(pages: PageKnowledge[], currentUrl:
     }
     for (const btn of p.buttons) {
       if (btn.name) {
-        const loc = btn.locators.getByRole || btn.locators.getByText
+        const loc = btn.locators.byTestId || btn.locators.byId || btn.locators.getByRole || btn.locators.getByText
         if (loc) lines.push(`${btn.name} → ${loc}`)
       }
     }
@@ -61,7 +92,8 @@ export function formatKnowledgeForAnalyst(pages: PageKnowledge[]): string {
           parts.push(`Form fields:`)
           for (const field of form.fields) {
             const name = field.label || field.placeholder || field.htmlName || '(unnamed)'
-            const best = field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole || field.locators.byName || '(no locator)'
+            const best = field.locators.byTestId || field.locators.byId || field.locators.byName
+              || field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole || '(no locator)'
             parts.push(`  - ${name}: ${best}`)
           }
         }

@@ -17,10 +17,12 @@ export async function testCaseAgent(
   scenarios: string,
   singleTestCase: boolean,
   onChunk: (text: string) => void,
-  appContext?: string
+  appContext?: string,
+  credentials?: string,
 ): Promise<TestCase[]> {
   const prompt = fillPrompt('testcase-writer', {
     ui_knowledge: appContext || '(no UI knowledge available — use generic field names)',
+    app_credentials: credentials || '(no credentials configured — use placeholder values)',
     requirements_json: JSON.stringify(requirements, null, 2),
     scenarios,
     mode: singleTestCase
