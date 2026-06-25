@@ -465,10 +465,11 @@ async function getAriaSnapshot(page: Page): Promise<string> {
 // Extracts raw input metadata directly from DOM — bypasses ARIA bugs like
 // Shopify's pattern where <div id="X"> shadows <input id="X">.
 
-async function extractDomFields(page: Page): Promise<string> {
+async function extractDomFields(page: Page): Promise<{ fields: string; interactive: string }> {
   try {
-    const fields = await page.evaluate(() => {
-      return Array.from(
+    const result = await page.evaluate(() => {
+      // Form fields
+      const fields = Array.from(
         document.querySelectorAll<HTMLInputElement>('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select')
       ).map(el => {
         const labelEl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null
@@ -481,13 +482,53 @@ async function extractDomFields(page: Page): Promise<string> {
           placeholder: (el as HTMLInputElement).placeholder || '',
         }
       }).filter(f => f.name || f.label || f.id)
+
+      // Interactive elements: buttons + CTA links
+      const trim = (s: string | null | undefined) => s?.trim().replace(/\s+/g, ' ') || ''
+      const buttons = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          'button, [role="button"], input[type="submit"], input[type="button"]'
+        )
+      ).slice(0, 60).map(el => {
+        const text = trim((el as HTMLInputElement).value || el.innerText || el.getAttribute('aria-label'))
+        const testId = el.getAttribute('data-testid') || el.getAttribute('data-cy') || ''
+        const elId = el.id || ''
+        const cssClass = Array.from(el.classList).filter(c => !/^(fa|icon|glyphicon|d-|m-|p-)/.test(c)).slice(0, 2).join('.')
+        return { kind: 'button' as const, text, testId, id: elId, cssClass }
+      }).filter(b => b.text)
+
+      const links = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>('a[href], a[onclick], a[href="javascript:void(0)"]')
+      ).slice(0, 80).map(el => {
+        const text = trim(el.innerText || el.getAttribute('aria-label'))
+        const href = el.getAttribute('href') || ''
+        const cssClass = Array.from(el.classList).filter(c => !/^(fa|icon|nav|d-|m-)/.test(c)).slice(0, 2).join('.')
+        const testId = el.getAttribute('data-testid') || ''
+        const elId = el.id || ''
+        return { kind: 'link' as const, text, href, cssClass, testId, id: elId }
+      }).filter(l => l.text)
+
+      return { fields, buttons, links }
     })
-    if (fields.length === 0) return '(no interactive form fields found)'
-    return fields.map(f =>
-      `  label="${f.label}" name="${f.name}" id="${f.id}" type="${f.type}" placeholder="${f.placeholder}"`
-    ).join('\n')
+
+    const fieldsStr = result.fields.length === 0
+      ? '(no form fields found)'
+      : result.fields.map(f =>
+          `  label="${f.label}" name="${f.name}" id="${f.id}" type="${f.type}" placeholder="${f.placeholder}"`
+        ).join('\n')
+
+    const interactiveStr = [
+      ...result.buttons.map(b =>
+        `  [button] text="${b.text}"${b.testId ? ` data-testid="${b.testId}"` : ''}${b.id ? ` id="${b.id}"` : ''}${b.cssClass ? ` class="${b.cssClass}"` : ''}`
+      ),
+      ...result.links.map(l =>
+        `  [link] text="${l.text}" href="${l.href}"${l.cssClass ? ` class="${l.cssClass}"` : ''}${l.testId ? ` data-testid="${l.testId}"` : ''}${l.id ? ` id="${l.id}"` : ''}`
+      ),
+    ].join('\n') || '(no interactive elements found)'
+
+    return { fields: fieldsStr, interactive: interactiveStr }
   } catch {
-    return '(could not extract DOM fields)'
+    return { fields: '(could not extract DOM fields)', interactive: '(could not extract interactive elements)' }
   }
 }
 
@@ -644,11 +685,14 @@ async function resolveStepWithLLM(
   onEvent?: (e: AgentEvent) => void,
 ): Promise<ParsedStep> {
   await waitForStable(page)
-  const [ariaSnap, domFieldsRaw] = await Promise.all([getAriaSnapshot(page), extractDomFields(page)])
+  const [ariaSnap, { fields: domFieldsRaw, interactive: domInteractive }] = await Promise.all([getAriaSnapshot(page), extractDomFields(page)])
+
+  // Strip [inferred] tag before passing step to resolver — it's a TC annotation, not part of the action
+  const cleanStep = step.replace(/\s*\[inferred\]/gi, '').trim()
 
   const fieldCount = (domFieldsRaw.match(/label=/g) || []).length
   onEvent?.({ type: 'dom_inspect', url: page.url(), fieldCount, text: `${fieldCount} field(s) found on ${page.url()}` })
-  onEvent?.({ type: 'agent_thinking', text: `Resolving locator for: ${step}` })
+  onEvent?.({ type: 'agent_thinking', text: `Resolving locator for: ${cleanStep}` })
 
   const kbHints = formatPagesForParsing(pages)
 
@@ -657,9 +701,10 @@ async function resolveStepWithLLM(
     current_url: page.url(),
     aria_snapshot: ariaSnap,
     dom_fields: domFieldsRaw,
+    dom_interactive: domInteractive,
     knowledge_base: kbHints,
     app_credentials: formatCredentialsForLLM(appConfig),
-    step,
+    step: cleanStep,
     expected: expected || '(not specified)',
     custom_instructions: instructions,
   })
@@ -673,7 +718,7 @@ async function resolveStepWithLLM(
   })
 
   // Extract target field name from step ("Fill 'First Name' with 'John'" → "First Name")
-  const targetMatch = step.match(/['"]([^'"]+)['"]/i)
+  const targetMatch = cleanStep.match(/['"]([^'"]+)['"]/i)
   const targetLabel = targetMatch?.[1]?.toLowerCase() ?? ''
 
   // Direct match: label / placeholder / id / name contains the target word(s)
@@ -688,7 +733,7 @@ async function resolveStepWithLLM(
       : directMatch.type === 'password'
       ? `page.locator('input[type="password"]')`
       : `page.getByLabel('${directMatch.label || directMatch.placeholder}')`
-    const valueMatch = step.match(/with\s+['"]([^'"]+)['"]/i)
+    const valueMatch = cleanStep.match(/with\s+['"]([^'"]+)['"]/i)
     onEvent?.({ type: 'llm_response', action: 'fill', locator, rationale: `matched "${targetLabel}" → ${locator}` })
     return { action: 'fill', target: targetLabel, value: valueMatch?.[1] ?? '', locator }
   }
@@ -698,7 +743,7 @@ async function resolveStepWithLLM(
     const pwField = domFields.find(f => f.type === 'password')
     if (pwField) {
       const locator = pwField.name ? `page.locator('input[name="${pwField.name}"]')` : `page.locator('input[type="password"]')`
-      const valueMatch = step.match(/with\s+['"]([^'"]+)['"]/i)
+      const valueMatch = cleanStep.match(/with\s+['"]([^'"]+)['"]/i)
       onEvent?.({ type: 'llm_response', action: 'fill', locator, rationale: `password type → ${locator}` })
       return { action: 'fill', target: 'password', value: valueMatch?.[1] ?? '', locator }
     }
@@ -709,7 +754,7 @@ async function resolveStepWithLLM(
     `${i + 1}. label="${f.label}" name="${f.name}" id="${f.id}" type="${f.type}" placeholder="${f.placeholder}"`
   ).join('\n')
 
-  const focusedPrompt = `You are a Playwright locator expert. A form on ${page.url()} has these input fields:\n${fieldList}\n\nTest step: "${step}"\n\nWhich field index matches the target? Return JSON only:\n{"index": <1-based number>, "locator": "<playwright locator expression>", "value": "<value to type>"}`
+  const focusedPrompt = `You are a Playwright locator expert. A form on ${page.url()} has these input fields:\n${fieldList}\n\nTest step: "${cleanStep}"\n\nWhich field index matches the target? Return JSON only:\n{"index": <1-based number>, "locator": "<playwright locator expression>", "value": "<value to type>"}`
 
   try {
     const raw = await callLLM(focusedPrompt, `You are a senior QA automation engineer.\n${instructions}\nReturn a single JSON object only. No markdown. No explanation.`)

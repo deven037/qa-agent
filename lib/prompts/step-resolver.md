@@ -16,10 +16,15 @@ Current URL: {{current_url}}
 {{aria_snapshot}}
 ```
 
-### DOM Form Fields (raw HTML — most reliable for locators)
+### DOM Form Fields (raw HTML — most reliable for fill locators)
 These are actual input elements extracted directly from the DOM. The `name` attribute is the ground truth — use it for CSS selectors when available.
 ```
 {{dom_fields}}
+```
+
+### DOM Interactive Elements (buttons + links live from page — use for click/navigate steps)
+```
+{{dom_interactive}}
 ```
 
 ## Knowledge Base Hints
@@ -42,12 +47,14 @@ Expected result: {{expected}}
    - **CRITICAL FOR PASSWORD**: If the step says "Password" or "password", look for a DOM field with `type="password"` and use its `name` attribute: `page.locator('input[type="password"]')` or `page.locator('input[name="exact_password_name"]')`. NEVER reuse the email/username locator for a password field.
    - **GOOD**: If ARIA snapshot shows `textbox "Label"` matching → use `page.getByRole('textbox', {name:'Label'})`.
    - **FALLBACK**: `page.getByLabel('Label')` — only if no name attribute exists.
-4. **For click actions** — use what you see in the ARIA snapshot AND the DOM context:
-   - `button "Label"` → `page.getByRole('button', {name:'Label'})` — only for real `<button>` tags
-   - `link "Label"` that IS a real navigation link → `page.getByRole('link', {name:'Label'})`
-   - `link "Label"` that is an onclick/javascript link (acts as button) → `page.locator('a:has-text("Label")')` or `page.locator('a.className')` — check DOM Fields for the CSS class
+4. **For click actions** — check DOM Interactive Elements FIRST, then ARIA, then KB:
+   - Search DOM Interactive Elements for a button or link whose `text` matches the target
+   - `[button] text="Add to Cart"` → `page.getByRole('button', {name:'Add to Cart'})` or if it has a class → `page.locator('button.classname')`
+   - `[link] text="Add to Cart" class="cart"` → it's an onclick link → `page.locator('a.cart')` or `page.locator('a:has-text("Add to Cart")')`
+   - `[link] text="Label" href="/real/path"` → it's a nav link → `page.getByRole('link', {name:'Label'})`
+   - If DOM Interactive Elements has a `data-testid` → use `page.locator('[data-testid="..."]')` — highest priority
    - If Knowledge Base has a locator for the target → use that EXACTLY, it was crawled from the real DOM
-   - If the target is an icon-only button → look for `aria-label` in DOM Fields: `page.locator('[aria-label="Close"]')`
+   - If the target is an icon-only button → look for `aria-label`: `page.locator('[aria-label="Close"]')`
    - Multiple elements with same text → scope with parent: `page.locator('.product-wrap:has-text("Product") a.cart')`
 5. **For navigate**: extract the path or full URL from the step text.
 6. **For assert**: URL check → target="url", value=URL fragment; visible text check → target=text to verify.
