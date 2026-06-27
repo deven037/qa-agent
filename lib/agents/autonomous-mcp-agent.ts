@@ -116,7 +116,7 @@ const LLAMA_ALLOWED_TOOLS = new Set([
   'browser_select_option',
   'browser_press_key',
   'browser_wait_for',
-  'browser_screenshot',
+  'browser_take_screenshot',
 ])
 
 function isLlamaProvider(label: string): boolean {
@@ -301,7 +301,7 @@ async function executeTool(
       onEvent({ type: 'step_start', tcId: tc.id, stepIndex, step: tc.steps[stepIndex] ?? `Step ${stepIndex + 1}` })
       // Capture screenshot as proof before confirming the step
       try {
-        const ssResult = await client.callTool({ name: 'browser_screenshot', arguments: {} })
+        const ssResult = await client.callTool({ name: 'browser_take_screenshot', arguments: {} })
         const ssContent = ssResult.content as Array<{ type: string; data?: string; text?: string }>
         const imgPart = ssContent.find(c => c.type === 'image' && c.data)
         if (imgPart?.data) {
