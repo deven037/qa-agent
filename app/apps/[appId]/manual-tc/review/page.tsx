@@ -169,7 +169,20 @@ export default function ManualTCReviewPage() {
                 <div className="flex items-start gap-2 flex-wrap">
                   <span className="font-mono text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded font-semibold">{tc.id}</span>
                   <span className="font-semibold text-sm text-slate-800">{tc.title}</span>
-                  <div className="flex gap-1.5 ml-auto">
+                  <div className="flex gap-1.5 ml-auto flex-wrap">
+                    {tc.verificationStatus && (() => {
+                      const { verified, total } = tc.verificationStatus
+                      const allOk = verified === total
+                      const majority = verified >= total * 0.5
+                      return (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${
+                          allOk ? 'bg-emerald-100 text-emerald-700' :
+                          majority ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          {allOk ? '✓ Ready' : majority ? '⚠ Partial' : '✗ Blocked'} ({verified}/{total})
+                        </span>
+                      )
+                    })()}
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                       tc.type === 'positive' ? 'bg-emerald-100 text-emerald-700' :
                       tc.type === 'negative' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'
@@ -181,15 +194,27 @@ export default function ManualTCReviewPage() {
                   </div>
                 </div>
                 <ol className="space-y-1.5">
-                  {tc.steps.map((step, i) => (
-                    <li key={i} className="grid grid-cols-[20px_1fr_1fr] gap-x-3 items-start text-sm">
-                      <span className="w-5 h-5 rounded-full bg-violet-100 text-violet-700 text-xs font-bold flex items-center justify-center shrink-0">{i + 1}</span>
-                      <span className="text-slate-700">{step}</span>
-                      {tc.stepExpected?.[i] && (
-                        <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5 self-start">{tc.stepExpected[i]}</span>
-                      )}
-                    </li>
-                  ))}
+                  {tc.steps.map((step, i) => {
+                    const ss = tc.structuredSteps?.[i]
+                    const isUnresolved = tc.verificationStatus?.unresolvedIndices.includes(i)
+                    const isVerified = ss?.verified === true
+                    return (
+                      <li key={i} className="grid grid-cols-[20px_1fr_1fr] gap-x-3 items-start text-sm">
+                        <span className="w-5 h-5 rounded-full bg-violet-100 text-violet-700 text-xs font-bold flex items-center justify-center shrink-0 relative">
+                          {i + 1}
+                          {tc.verificationStatus && (
+                            <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-white ${
+                              isVerified ? 'bg-emerald-500' : isUnresolved ? 'bg-red-400' : 'bg-slate-300'
+                            }`} />
+                          )}
+                        </span>
+                        <span className={`${isUnresolved ? 'text-amber-700' : 'text-slate-700'}`}>{step}</span>
+                        {tc.stepExpected?.[i] && (
+                          <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5 self-start">{tc.stepExpected[i]}</span>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ol>
               </div>
             ))}

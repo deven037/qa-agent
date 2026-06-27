@@ -8,6 +8,10 @@ function loadPrompt(name: string): string {
   return raw.replace(/^---[\s\S]*?---\n/, '').trim()
 }
 
+export function loadGlobalInstructions(): string {
+  return loadPrompt('global-instructions')
+}
+
 export function fillPrompt(name: string, vars: Record<string, string>): string {
   let content = loadPrompt(name)
   for (const [key, value] of Object.entries(vars)) {

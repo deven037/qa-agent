@@ -7,8 +7,9 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import {
   Play, Loader2, Monitor, EyeOff, Plus, Pencil, Check, X,
-  CheckCircle2, XCircle, MinusCircle, Terminal, Copy, RefreshCw,
+  CheckCircle2, XCircle, MinusCircle, Terminal, Copy, RefreshCw, FileText,
 } from 'lucide-react'
+import Link from 'next/link'
 import type { AgentEvent, ExecutionResult } from '@/lib/agents/playwright-mcp-agent'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -106,6 +107,7 @@ export default function AutomationPage() {
   const [isExecuting, setIsExecuting] = useState(false)
   const [consoleLines, setConsoleLines] = useState<ConsoleEntry[]>([])
   const [execResult, setExecResult] = useState<ExecutionResult | null>(null)
+  const [runId, setRunId] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
   const consoleEndRef = useRef<HTMLDivElement>(null)
@@ -221,6 +223,7 @@ export default function AutomationPage() {
     setIsExecuting(true)
     setConsoleLines([])
     setExecResult(null)
+    setRunId(null)
     if (mode === 'freeform') setPlanSteps([])
 
     const controller = new AbortController()
@@ -255,6 +258,8 @@ export default function AutomationPage() {
           const data = line.slice(6).trim()
           if (data.startsWith('[DONE]')) {
             try { setExecResult(JSON.parse(data.slice(7))) } catch { /* ignore */ }
+          } else if (data.startsWith('[RUN_ID]')) {
+            setRunId(data.slice(9).trim())
           } else if (data.startsWith('[ERROR]')) {
             addLine('system', `ERROR: ${data.slice(8)}`)
             toast.error(data.slice(8))
@@ -540,6 +545,15 @@ export default function AutomationPage() {
                 <span className="text-zinc-600 mx-2">·</span>
                 <span className="text-zinc-500">⏱ {(execResult.duration / 1000).toFixed(2)}s</span>
               </span>
+              {runId && (
+                <Link
+                  href={`/apps/${appId}/reports/${runId}`}
+                  className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg bg-violet-600/30 hover:bg-violet-600/50 text-violet-300 hover:text-violet-100 text-xs font-medium transition-all border border-violet-500/30"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  View Full Report
+                </Link>
+              )}
             </div>
           )}
         </div>

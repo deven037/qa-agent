@@ -5,8 +5,6 @@ import { searchJiraIssues, fetchJiraIssue } from '@/lib/jira/client'
 import WorkItemTypeChart from '@/components/apps/WorkItemTypeChart'
 import ModuleChart from '@/components/apps/ModuleChart'
 import AutomationTable from '@/components/apps/AutomationTable'
-import KnowledgeCard from '@/components/apps/KnowledgeCard'
-import { getKnowledgeStatus } from '@/lib/db/knowledge-store'
 import { BookOpen, Bug, FlaskConical, Zap, ArrowUpRight, ExternalLink } from 'lucide-react'
 import Link from 'next/link'
 
@@ -34,8 +32,6 @@ export default async function DashboardPage({ params }: { params: Promise<{ appI
 
   const { appId } = await params
   const app = (await readApps()).find((a) => a.id === appId)!
-  const knowledgeStatus = await getKnowledgeStatus(appId).catch(() => null)
-
   const typeCounts = await Promise.all(
     ISSUE_TYPES.map((t) => searchJiraIssues(app.jiraProjectKey, '', t).catch(() => []))
   )
@@ -115,12 +111,8 @@ export default async function DashboardPage({ params }: { params: Promise<{ appI
               {failedTests > 0 ? `${failedTests} test${failedTests > 1 ? 's' : ''} failing` :
                passedTests > 0 ? `${passedTests} passing` : 'No automation run'}
             </span>
-            <span className={`text-xs font-medium px-3 py-1 rounded-full ${
-              knowledgeStatus?.status === 'ready' ? 'bg-emerald-500/30 text-emerald-100' :
-              knowledgeStatus?.status === 'crawling' ? 'bg-amber-500/30 text-amber-100' :
-              'bg-white/10 text-white/50'
-            }`}>
-              KB · {knowledgeStatus?.status === 'ready' ? 'ready' : knowledgeStatus?.status === 'crawling' ? 'crawling…' : 'not set up'}
+            <span className="text-xs font-medium px-3 py-1 rounded-full bg-violet-500/30 text-violet-100">
+              Live recon · active
             </span>
           </div>
         </div>
@@ -171,9 +163,6 @@ export default async function DashboardPage({ params }: { params: Promise<{ appI
           <ModuleChart data={byModule} />
         </div>
       </div>
-
-      {/* Knowledge base */}
-      <KnowledgeCard appId={appId} knowledgeStatus={knowledgeStatus} storePassword={app.storePassword} />
 
       {/* Automation tests */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm">

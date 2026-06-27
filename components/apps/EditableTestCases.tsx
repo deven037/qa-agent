@@ -4,6 +4,16 @@ import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
 
+export interface TestStep {
+  description: string
+  action: string
+  target: string
+  value?: string
+  locator?: string | null
+  expected: string
+  verified?: boolean
+}
+
 export interface TestCase {
   id: string
   title: string
@@ -12,6 +22,8 @@ export interface TestCase {
   steps: string[]
   stepExpected?: string[]
   expectedResult: string
+  structuredSteps?: TestStep[]
+  verificationStatus?: { verified: number; total: number; unresolvedIndices: number[] }
 }
 
 interface Props {

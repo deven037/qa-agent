@@ -4,7 +4,7 @@ import { readApps } from '@/lib/config/store'
 import { fetchJiraIssue, findExistingTestCases, attachFileToJiraIssue, parseTestCasesFromMarkdown } from '@/lib/jira/client'
 import { automationAgent } from '@/lib/agents/automation-agent'
 import { TestCase } from '@/lib/agents/testcase-agent'
-import { inferRelevantPages, getLocatorContext } from '@/lib/knowledge/retriever'
+
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -36,16 +36,8 @@ export async function POST(req: NextRequest) {
           return
         }
 
-        // Load real locators from knowledge base
-        const scenarioText = testCases.map((tc) => tc.title).join(' ')
-        const relevantPages = await inferRelevantPages(appId, scenarioText, 5)
-        const locatorContext = getLocatorContext(relevantPages)
-        if (relevantPages.length > 0) {
-          send(`\n🗺️ Loaded real UI locators from ${relevantPages.length} page(s) in knowledge base\n`)
-        }
-
         send(`\n🤖 Generating Playwright automation script (${browser}, ${includeNegative ? 'positive + negative' : 'positive only'})...\n`)
-        const script = await automationAgent(issueKey, testCases, app, send, locatorContext || undefined, { browser, instructions, includeNegative, includeScreenshots })
+        const script = await automationAgent(issueKey, testCases, app, send, undefined, { browser, instructions, includeNegative, includeScreenshots })
 
         await attachFileToJiraIssue(issueKey, `${issueKey}.spec.ts`, script)
         send(`\n✅ Script saved to Jira and disk.\n`)

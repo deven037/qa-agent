@@ -11,7 +11,6 @@
  */
 
 import { playwrightMcpAgent, replaySavedScript, AgentEvent, ResolvedStepRecord } from '../lib/agents/playwright-mcp-agent'
-import { inferRelevantPages } from '../lib/knowledge/retriever'
 import { readApps } from '../lib/config/store'
 import { fetchJiraIssue, extractPlaywrightScript, savePlaywrightScript, postJiraComment } from '../lib/jira/client'
 import { planStepsFromInstruction } from '../lib/agents/step-planner'
@@ -73,14 +72,13 @@ async function runJob(job: RunnerJob): Promise<void> {
 
     if (job.freeform) {
       const instruction = job.instruction ?? ''
-      const pages = await inferRelevantPages(job.appId, instruction, 6)
-      const planned = await planStepsFromInstruction(instruction, app, pages, onEvent)
+      const planned = await planStepsFromInstruction(instruction, app, onEvent)
       const testCases: TestCase[] = [{
         id: 'local-1', title: instruction.slice(0, 80), type: 'positive', priority: 'high',
         steps: planned.map(s => s.step), stepExpected: planned.map(s => s.expected),
         expectedResult: planned.at(-1)?.expected ?? '',
       }]
-      await playwrightMcpAgent(testCases, app, pages, onEvent, { browser: job.browser, instructions: job.instructions, headed: true })
+      await playwrightMcpAgent(testCases, app, onEvent, { browser: job.browser, instructions: job.instructions, headed: true })
     } else {
       const issueKey = job.issueKey!
       const issue = await fetchJiraIssue(issueKey)
@@ -99,8 +97,6 @@ async function runJob(job: RunnerJob): Promise<void> {
         }
       }
 
-      const pages = await inferRelevantPages(job.appId, `${issue.summary} ${testSteps.map(s => s.step).join(' ')}`, 6)
-
       if (savedSteps) {
         onEvent({ type: 'log', text: `Replaying saved script (${savedSteps.length} steps, no LLM)` })
         const result = await replaySavedScript(issue.summary, savedSteps, app, onEvent, { browser: job.browser, headed: true })
@@ -111,7 +107,7 @@ async function runJob(job: RunnerJob): Promise<void> {
             steps: testSteps.map(s => s.step), stepExpected: testSteps.map(s => s.expected),
             expectedResult: testSteps.at(-1)?.expected ?? '',
           }]
-          const fallback = await playwrightMcpAgent(testCases, app, pages, onEvent, { browser: job.browser, instructions: job.instructions, headed: true })
+          const fallback = await playwrightMcpAgent(testCases, app, onEvent, { browser: job.browser, instructions: job.instructions, headed: true })
           if (fallback.failed === 0 && fallback.resolvedSteps?.length === testSteps.length) {
             await saveScript(issueKey, issue.summary, fallback, issue.comments, onEvent)
           }
@@ -125,7 +121,7 @@ async function runJob(job: RunnerJob): Promise<void> {
           steps: testSteps.map(s => s.step), stepExpected: testSteps.map(s => s.expected),
           expectedResult: testSteps.at(-1)?.expected ?? '',
         }]
-        const result = await playwrightMcpAgent(testCases, app, pages, onEvent, { browser: job.browser, instructions: job.instructions, headed: true })
+        const result = await playwrightMcpAgent(testCases, app, onEvent, { browser: job.browser, instructions: job.instructions, headed: true })
         if (result.failed === 0 && result.resolvedSteps?.length === testSteps.length) {
           await saveScript(issueKey, issue.summary, result, issue.comments, onEvent)
         }
