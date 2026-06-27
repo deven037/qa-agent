@@ -151,7 +151,7 @@ const SYNTHETIC_TOOLS: OpenAI.ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'mark_step',
-      description: 'Report the status of a numbered test step after attempting it. Call this after EVERY step attempt — pass or fail.',
+      description: 'Report the status of a numbered test step. ONLY call this AFTER you have called browser_snapshot and confirmed the page state matches the expected result. Never call mark_step without first verifying via snapshot.',
       parameters: {
         type: 'object',
         properties: {
@@ -206,22 +206,37 @@ Overall expected: ${tc.expectedResult}
 Execute every step using browser tools. After EACH step, call mark_step(stepIndex, status, message).
 When ALL steps are done (or you are truly stuck), call mark_tc_done(status, reason).
 
+## MANDATORY step execution flow (follow this EXACTLY for every step)
+1. Perform the action (navigate / fill / click / etc.)
+2. Call browser_snapshot — read what is on the page RIGHT NOW
+3. Verify the snapshot contains evidence the action worked (expected text, element, URL change)
+4. ONLY THEN call mark_step — pass if evidence found, fail if not
+
+You MUST call browser_snapshot after every action before calling mark_step.
+DO NOT call mark_step without first reading the current page state via browser_snapshot.
+Ignoring errors and marking passed without evidence is a critical failure.
+
+## Evidence rules
+- After navigate: snapshot must show the expected page title/heading or URL
+- After fill/type: snapshot must show the field has a value
+- After click (button/link): snapshot must show a page change, success message, or new content
+- After login: snapshot must show account dashboard or username in nav — NOT the login form
+- If snapshot shows the same page or an error: the action FAILED, retry or mark failed
+
 ## CRITICAL Navigation Rules
-1. If browser_navigate returns any error OR the page doesn't look right: IMMEDIATELY call browser_snapshot to check what actually loaded. Sites redirect — the page may have loaded fine despite the error.
-2. If the direct path fails (e.g. /login doesn't exist): navigate to ${base}, call browser_snapshot, find the login/register link by reading the nav, then click it.
-3. NEVER mark a step failed after only 1-2 tool calls. Try at least 3 different approaches:
-   - Direct URL → snapshot → look for the element → try clicking by text/role
+1. If browser_navigate returns any error: call browser_snapshot to check what loaded — sites redirect.
+2. If direct path fails: navigate to ${base}, snapshot, find the correct link in the nav, click it.
+3. NEVER mark passed after only 1 tool call. Minimum: action → snapshot → verify → mark.
 4. Steps marked [inferred] mean the path was unknown — explore via snapshot and find the feature yourself.
-5. For login forms: use browser_fill_form with BOTH username/email AND password fields together, then click the login button.
+5. For login forms: use browser_fill_form with BOTH username AND password fields, then click login.
 
-## Required Retry Pattern
-If ANYTHING fails:
-  1. Call browser_snapshot to see current state
-  2. Read what's on the page
-  3. Try the action again using what you see (refs, text, roles)
-  4. Only call mark_step('failed', ...) after 3+ failed attempts
+## Retry pattern
+If snapshot doesn't show expected state:
+  1. Try the action again with a different locator (read refs from the snapshot)
+  2. Wait with browser_wait_for if content is loading
+  3. After 3 failed attempts: mark_step failed with exact reason
 
-## Tool budget: ~60 browser tool calls. Spend them on retries, not giving up.`
+## Tool budget: ~80 browser tool calls. Every step needs: action + snapshot + verify.`
 }
 
 // ─── MCP client setup ──────────────────────────────────────────────────────────
@@ -236,6 +251,8 @@ async function spawnMcpClient(browserType: string): Promise<Client> {
 
   // Use locally installed @playwright/mcp binary — avoids npx download at runtime in Docker
   const mcpCli = path.join(process.cwd(), 'node_modules', '@playwright', 'mcp', 'cli.js')
+  // Use /tmp for user data so it's always writable (avoids EACCES in Docker)
+  const userDataDir = `/tmp/pw-mcp-${Date.now()}`
 
   const transport = new StdioClientTransport({
     command: 'node',
@@ -245,6 +262,7 @@ async function spawnMcpClient(browserType: string): Promise<Client> {
       '--viewport-size=1280,800',
       '--no-sandbox',
       `--executable-path=${executablePath}`,
+      `--user-data-dir=${userDataDir}`,
       ...(browserType === 'firefox' ? ['--browser=firefox'] : browserType === 'webkit' ? ['--browser=webkit'] : []),
     ],
   })
