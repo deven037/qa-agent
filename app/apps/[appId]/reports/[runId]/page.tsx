@@ -130,8 +130,13 @@ export default function ReportPage() {
 
   useEffect(() => {
     fetch(`/api/test-runs/${runId}`)
-      .then(r => { if (r.status === 404) { setNotFound(true); return null } return r.json() })
+      .then(r => {
+        if (r.status === 404) { setNotFound(true); return null }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
       .then(d => { if (d) setRun(d) })
+      .catch(() => setNotFound(true))
       .finally(() => setLoading(false))
   }, [runId])
 

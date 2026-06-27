@@ -3,7 +3,6 @@ import { fillPrompt, loadGlobalInstructions } from '@/lib/prompts/loader'
 import { formatCredentialsForLLM } from '@/lib/config/store'
 import type { AgentEvent } from './playwright-mcp-agent'
 import type { AppConfig } from '@/lib/config/store'
-import type { PageKnowledge } from '@/lib/db/models/AppKnowledge'
 
 export interface PlannedStep {
   step: string
@@ -13,17 +12,10 @@ export interface PlannedStep {
 export async function planStepsFromInstruction(
   instruction: string,
   appConfig: AppConfig,
-  pages: PageKnowledge[],
   onEvent: (e: AgentEvent) => void,
 ): Promise<PlannedStep[]> {
   onEvent({ type: 'plan_start', text: `Planning steps for: ${instruction}` })
-  onEvent({ type: 'agent_thinking', text: 'Analyzing instruction and known pages…' })
-
-  const knownPaths = pages.map(p => p.path).filter(Boolean).join(', ') || '(unknown)'
-  const knownFields = pages.flatMap((p: PageKnowledge) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ((p as any).forms || []).flatMap((f: any) => (f.fields || []).map((field: any) => field.name || field.label || ''))
-  ).filter(Boolean).slice(0, 20).join(', ') || '(unknown)'
+  onEvent({ type: 'agent_thinking', text: 'Analyzing instruction…' })
 
   const globalInstructions = loadGlobalInstructions()
   const perApp = appConfig.automationInstructions?.trim()
@@ -32,8 +24,8 @@ export async function planStepsFromInstruction(
   const prompt = fillPrompt('step-planner', {
     instruction,
     base_url: appConfig.baseUrl,
-    known_paths: knownPaths,
-    known_fields: knownFields,
+    known_paths: '(live DOM — paths resolved at execution time)',
+    known_fields: '(live DOM — fields resolved at execution time)',
     app_credentials: formatCredentialsForLLM(appConfig),
     custom_instructions: instructions,
   })

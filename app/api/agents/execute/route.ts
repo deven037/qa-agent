@@ -2,12 +2,11 @@ import { NextRequest } from 'next/server'
 import { nanoid } from 'nanoid'
 import { auth } from '@/auth'
 import { readApps } from '@/lib/config/store'
-import { fetchJiraIssue, postJiraComment, extractPlaywrightScript, savePlaywrightScript } from '@/lib/jira/client'
+import { fetchJiraIssue, postJiraComment } from '@/lib/jira/client'
 import { TestCase } from '@/lib/agents/testcase-agent'
-import { inferRelevantPages } from '@/lib/knowledge/retriever'
-import { playwrightMcpAgent, replaySavedScript, AgentEvent, ExecutionResult, ResolvedStepRecord } from '@/lib/agents/playwright-mcp-agent'
+import { AgentEvent, ExecutionResult } from '@/lib/agents/playwright-mcp-agent'
+import { autonomousMcpAgent } from '@/lib/agents/autonomous-mcp-agent'
 import { planStepsFromInstruction } from '@/lib/agents/step-planner'
-import { compileScript } from '@/lib/agents/script-compiler'
 import { createJob, subscribeToJob, JobSignal } from '@/lib/runner/job-store'
 import { TestRun, StepRecord, NavEvent } from '@/lib/db/models/TestRun'
 import dbConnect from '@/lib/db/mongoose'
@@ -145,123 +144,45 @@ export async function POST(req: NextRequest) {
       }
 
       try {
+        // ── Autonomous agent — single conversation drives the full TC ──────────
         let testCases: TestCase[]
-        let scenarioText: string
 
         if (freeform) {
-          log(`Loading app knowledge for freeform execution…`)
-          const relevantPages = await inferRelevantPages(appId, instruction, 6)
-          log(`Loaded ${relevantPages.length} page(s). Planning steps…`)
-
-          const plannedSteps = await planStepsFromInstruction(instruction, app, relevantPages, sendEvent)
-          scenarioText = instruction
-
+          log(`[Auto] Planning steps for: ${instruction.slice(0, 80)}…`)
+          const plannedSteps = await planStepsFromInstruction(instruction, app, sendEvent)
+          if (plannedSteps.length === 0) {
+            controller.enqueue(encoder.encode(`data: [ERROR] Planner produced no steps — try a more specific instruction.\n\n`))
+            controller.close(); return
+          }
           testCases = [{
-            id: 'freeform-1',
-            title: instruction.slice(0, 80),
-            type: 'positive',
-            priority: 'high',
-            steps: plannedSteps.map(s => s.step),
-            stepExpected: plannedSteps.map(s => s.expected),
+            id: 'auto-freeform-1', title: instruction.slice(0, 80), type: 'positive', priority: 'high',
+            steps: plannedSteps.map(s => s.step), stepExpected: plannedSteps.map(s => s.expected),
             expectedResult: plannedSteps.at(-1)?.expected ?? '',
           }]
-
-          log(`Plan ready — ${plannedSteps.length} step(s). Starting execution…`)
-          const result = await playwrightMcpAgent(testCases, app, relevantPages, sendEvent, { browser, instructions, headed })
-          await saveRun(result, undefined, instruction.slice(0, 120), String(browser))
-          controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
+          sendEvent({ type: 'plan_done', text: `${plannedSteps.length} step(s) planned — autonomous agent starting…` })
         } else {
-          log(`Loading issue ${issueKey} from Jira…`)
+          log(`Loading ${issueKey} from Jira…`)
           const issue = await fetchJiraIssue(issueKey)
           const testSteps = issue.testSteps ?? []
-
           if (testSteps.length === 0) {
             controller.enqueue(encoder.encode(`data: [ERROR] No test steps found for ${issueKey}. Add test steps in the Work Items drawer first.\n\n`))
-            controller.close()
-            return
+            controller.close(); return
           }
-
-          // ── Check for saved Playwright script ─────────────────────────────
-          const savedScriptRaw = extractPlaywrightScript(issue.comments)
-          let savedSteps: ResolvedStepRecord[] | null = null
-          if (savedScriptRaw) {
-            try {
-              const jsonMatch = savedScriptRaw.match(/\/\*RESOLVED_STEPS:([\s\S]+?)\*\//)
-              if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[1]) as ResolvedStepRecord[]
-                // Only trust the saved script if it covers ALL current test steps
-                if (parsed.length === testSteps.length) {
-                  savedSteps = parsed
-                } else {
-                  log(`Saved script has ${parsed.length} step(s) but issue now has ${testSteps.length} — re-running with AI to regenerate…`)
-                }
-              }
-            } catch { /* malformed, fall through to full agent */ }
+          sendEvent({ type: 'plan_start', text: `Loading ${testSteps.length} step(s) from Jira ${issueKey}` })
+          for (let i = 0; i < testSteps.length; i++) {
+            sendEvent({ type: 'plan_step', stepIndex: i, plannedStep: { step: testSteps[i].step, expected: testSteps[i].expected }, text: testSteps[i].step })
           }
-
-          if (savedSteps && savedSteps.length > 0) {
-            // ── Replay saved script — no LLM ────────────────────────────────
-            sendEvent({ type: 'plan_start', text: `Replaying saved script for ${issueKey} (${savedSteps.length} steps, no LLM needed)` })
-            for (let i = 0; i < savedSteps.length; i++) {
-              sendEvent({ type: 'plan_step', stepIndex: i, plannedStep: { step: savedSteps[i].original, expected: '' }, text: savedSteps[i].original })
-            }
-            sendEvent({ type: 'plan_done', text: `Script loaded — replaying ${savedSteps.length} step(s)` })
-            log('Saved script found — skipping LLM, running directly…')
-
-            const result = await replaySavedScript(issue.summary, savedSteps, app, sendEvent, { browser, headed })
-
-            if (result.failed > 0) {
-              // Script broke (app changed) — fall back to full agent and regenerate
-              log('Saved script failed — app may have changed. Re-running with AI and updating script…')
-              sendEvent({ type: 'plan_start', text: 'Regenerating script with AI…' })
-              const relevantPages = await inferRelevantPages(appId, issue.summary, 6)
-              const testCasesFallback: TestCase[] = [{
-                id: issue.key, title: issue.summary, type: 'positive', priority: 'high',
-                steps: testSteps.map(s => s.step), stepExpected: testSteps.map(s => s.expected),
-                expectedResult: testSteps.at(-1)?.expected ?? '',
-              }]
-              const fallbackResult = await playwrightMcpAgent(testCasesFallback, app, relevantPages, sendEvent, { browser, instructions, headed })
-              await saveAndPostScript(issueKey, issue.summary, fallbackResult, issue.comments, sendEvent, log)
-              await postJiraComment(issueKey, buildJiraResults(issueKey, fallbackResult))
-              await saveRun(fallbackResult, issueKey, issue.summary, String(browser))
-              controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(fallbackResult)}\n\n`))
-            } else {
-              await postJiraComment(issueKey, buildJiraResults(issueKey, result))
-              await saveRun(result, issueKey, issue.summary, String(browser))
-              log('Results posted to Jira.')
-              controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
-            }
-          } else {
-            // ── First run — use full AI agent ────────────────────────────────
-            sendEvent({ type: 'plan_start', text: `Loading ${testSteps.length} step(s) from Jira ${issueKey}` })
-            for (let i = 0; i < testSteps.length; i++) {
-              sendEvent({ type: 'plan_step', stepIndex: i, plannedStep: { step: testSteps[i].step, expected: testSteps[i].expected }, text: testSteps[i].step })
-            }
-            sendEvent({ type: 'plan_done', text: `${testSteps.length} step(s) loaded — AI will resolve locators` })
-
-            const testCasesFirst: TestCase[] = [{
-              id: issue.key, title: issue.summary, type: 'positive', priority: 'high',
-              steps: testSteps.map(s => s.step), stepExpected: testSteps.map(s => s.expected),
-              expectedResult: testSteps.at(-1)?.expected ?? '',
-            }]
-
-            const relevantPages = await inferRelevantPages(appId, `${issue.summary} ${testSteps.map(s => s.step).join(' ')}`, 6)
-            log(`Loaded ${relevantPages.length} page(s). Starting first-run AI execution…`)
-
-            const result = await playwrightMcpAgent(testCasesFirst, app, relevantPages, sendEvent, { browser, instructions, headed })
-
-            if (result.failed === 0 && result.resolvedSteps && result.resolvedSteps.length === testSteps.length) {
-              await saveAndPostScript(issueKey, issue.summary, result, issue.comments, sendEvent, log)
-            } else if (result.failed === 0 && result.resolvedSteps && result.resolvedSteps.length < testSteps.length) {
-              log(`Script not saved — only ${result.resolvedSteps.length}/${testSteps.length} steps were captured. Re-run to generate script.`)
-            }
-
-            await postJiraComment(issueKey, buildJiraResults(issueKey, result))
-            await saveRun(result, issueKey, issue.summary, String(browser))
-            log('Results posted to Jira.')
-            controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
-          }
+          sendEvent({ type: 'plan_done', text: `${testSteps.length} step(s) loaded — autonomous agent starting…` })
+          testCases = [{ id: issue.key, title: issue.summary, type: 'positive', priority: 'high',
+            steps: testSteps.map(s => s.step), stepExpected: testSteps.map(s => s.expected),
+            expectedResult: testSteps.at(-1)?.expected ?? '' }]
         }
+
+        log('[Auto] Autonomous agent initializing…')
+        const result = await autonomousMcpAgent(testCases, app, sendEvent, { browser })
+        if (issueKey) await postJiraComment(issueKey, buildJiraResults(issueKey, result))
+        await saveRun(result, issueKey, freeform ? instruction.slice(0, 120) : issueKey, String(browser))
+        controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(result)}\n\n`))
       } catch (e) {
         controller.enqueue(encoder.encode(`data: [ERROR] ${String(e)}\n\n`))
       } finally {
@@ -273,29 +194,6 @@ export async function POST(req: NextRequest) {
   return new Response(stream, {
     headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
   })
-}
-
-
-async function saveAndPostScript(
-  issueKey: string,
-  title: string,
-  result: ExecutionResult,
-  comments: { id: string; body: string; author: string }[],
-  sendEvent: (e: AgentEvent) => void,
-  log: (t: string) => void,
-) {
-  try {
-    const steps = result.resolvedSteps!
-    const playwrightCode = compileScript(steps, '', title)
-    // Embed resolved steps as a JSON comment inside the script for replay
-    const resolvedJson = `/*RESOLVED_STEPS:${JSON.stringify(steps)}*/`
-    const fullScript = `${playwrightCode}\n\n${resolvedJson}`
-    await savePlaywrightScript(issueKey, fullScript, comments)
-    sendEvent({ type: 'log', text: `Script saved to Jira ${issueKey} — next run will skip AI and replay directly` })
-    log(`Playwright script saved to ${issueKey}.`)
-  } catch (e) {
-    log(`Script save failed (non-fatal): ${String(e)}`)
-  }
 }
 
 function buildJiraResults(issueKey: string, result: ExecutionResult): string {

@@ -5,8 +5,11 @@ import { fetchJiraIssue, findExistingScenarios } from '@/lib/jira/client'
 import { requirementAgent } from '@/lib/agents/requirement-agent'
 import { testCaseAgent, TestCase } from '@/lib/agents/testcase-agent'
 import { streamGemini } from '@/lib/ai/gemini'
-import { inferRelevantPages, getPageContext, getPageInventory } from '@/lib/knowledge/retriever'
 import { formatCredentialsForLLM } from '@/lib/config/store'
+import { fetchSitemap } from '@/lib/utils/sitemap'
+import { identifyRelevantPages } from '@/lib/agents/page-identifier-agent'
+import { liveReconAgent } from '@/lib/agents/live-recon-agent'
+import { verifyTestCases } from '@/lib/agents/step-verifier'
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -52,19 +55,17 @@ export async function POST(req: NextRequest) {
         send(`🔍 Analyzing requirements...\n`)
         const requirements = await requirementAgent(issue, send)
 
-        // Step 1: Load KB pages BEFORE generating scenarios — so scenarios are grounded in real app structure
-        send(`📚 Loading app knowledge base...\n`)
-        const testScope = Array.isArray(requirements.testScope) ? requirements.testScope.join(' ') : String(requirements.testScope ?? '')
-        const searchText = `${requirements.summary} ${testScope}`
-        const relevantPages = await inferRelevantPages(appId, searchText, 8)
-        const appContext = getPageContext(relevantPages)
-        const pageInventory = getPageInventory(relevantPages)
-
-        if (relevantPages.length > 0) {
-          send(`📚 Loaded ${relevantPages.length} relevant page(s) from knowledge base\n`)
-        } else {
-          send(`⚠️ No KB pages found — crawl the app first for best results\n`)
-        }
+        // Step 1: Live recon — capture real page structure from the app
+        send(`⚡ Capturing live app structure...\n`)
+        const sitemapPaths = await fetchSitemap(app.baseUrl)
+        if (sitemapPaths.length) send(`🗺️ Found ${sitemapPaths.length} URLs in sitemap\n`)
+        const pagesToCapture = await identifyRelevantPages(requirements, sitemapPaths, app, send)
+        send(`🎯 Targeting: ${pagesToCapture.join(', ')}\n`)
+        const reconResult = await liveReconAgent(app, pagesToCapture, send)
+        const appContext = reconResult.appContext
+        const pageInventory = reconResult.pageInventory
+        const elementMapContext = reconResult.elementMapContext
+        if (elementMapContext) send(`🗂️ Element map built — ${reconResult.pages.reduce((n, p) => n + p.elementMap.length, 0)} interactive elements mapped\n`)
 
         // Step 2: Generate scenario WITH app structure — produces concrete paths/elements, not vague text
         send(`📋 Generating app-grounded test scenario...\n`)
@@ -77,12 +78,21 @@ export async function POST(req: NextRequest) {
           scenarios = await generateScenarios(requirements, pageInventory, send)
         }
 
-        // Step 3: Generate test cases with both scenarios AND full page context
-        send(`🧪 Generating test cases from real app structure...\n`)
+        // Step 3: Generate test cases with element map → structured steps with embedded locators
+        send(`🧪 Generating test cases with pre-resolved locators...\n`)
         const credBlock = formatCredentialsForLLM(app)
-        const testCases: TestCase[] = await testCaseAgent(requirements, scenarios, true, send, appContext || undefined, credBlock)
+        const rawTestCases: TestCase[] = await testCaseAgent(
+          requirements, scenarios, true, send,
+          appContext || undefined, credBlock, elementMapContext || undefined
+        )
 
-        send(`✅ ${testCases.length} test case(s) generated. Review before saving.\n`)
+        // Step 4: Pre-flight verification — validate every locator against the live app, auto-fix failures
+        send(`🔍 Pre-verifying test steps against live app...\n`)
+        const testCases = await verifyTestCases(rawTestCases, app, send)
+
+        const totalSteps = testCases.reduce((n, tc) => n + (tc.verificationStatus?.total ?? tc.steps.length), 0)
+        const verifiedSteps = testCases.reduce((n, tc) => n + (tc.verificationStatus?.verified ?? tc.steps.length), 0)
+        send(`✅ ${testCases.length} test case(s) ready — ${verifiedSteps}/${totalSteps} steps pre-verified.\n`)
         controller.enqueue(encoder.encode(`data: [DONE] ${JSON.stringify(testCases)}\n\n`))
       } catch (e) {
         controller.enqueue(encoder.encode(`data: [ERROR] ${String(e)}\n\n`))
@@ -127,7 +137,7 @@ Rules:
 - Form fill steps MUST use exact field names from App Pages (e.g. "fills 'E-Mail Address'")
 - Click steps MUST use exact button/link text from App Pages (e.g. "clicks 'Login' button")
 - Do NOT invent page paths, field names, or button labels not present in App Pages
-- If a required page is missing from App Pages, mention it as "(page not crawled — path unknown)"
+- If a required page is missing from App Pages, write a natural step using domain knowledge and mark it [inferred]
 - One scenario only.`
 
   return streamGemini(prompt, 'You are a QA engineer. Write a concrete BDD scenario using only real app elements provided.', onChunk)

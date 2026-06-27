@@ -1,10 +1,8 @@
 import { chromium, firefox, webkit, Browser, Page, Locator, FrameLocator } from 'playwright'
 import { AppConfig, formatCredentialsForLLM } from '@/lib/config/store'
-import { PageKnowledge } from '@/lib/db/models/AppKnowledge'
 import { TestCase } from '@/lib/agents/testcase-agent'
 import { callLLM } from '@/lib/ai/gemini'
 import { fillPrompt, loadGlobalInstructions } from '@/lib/prompts/loader'
-import { formatPagesForParsing, formatLocatorsForCurrentPage, formatKnowledgeForAnalyst } from '@/lib/knowledge/formatter'
 
 // ─── Shared event types ───────────────────────────────────────────────────────
 
@@ -96,6 +94,11 @@ export function classifyError(err: Error): { cls: ErrorClass; matchCount?: numbe
     return { cls: 'nav_blocked' }
   }
 
+  // Navigation timeout — page didn't load in time
+  if (msg.includes('timeout') && (msg.includes('navigation') || msg.includes('goto') || msg.includes('exceeded') && !msg.includes('locator'))) {
+    return { cls: 'timeout' }
+  }
+
   // Timeout usually means 0 elements — they never appeared
   if (msg.includes('timeout') && (msg.includes('waiting for') || msg.includes('locator'))) {
     return { cls: 'not_found' }
@@ -156,124 +159,6 @@ function scoreMatch(name: string, tl: string): number {
   return 0
 }
 
-function findBestLocator(target: string, pages: PageKnowledge[]): string | null {
-  const tl = target.toLowerCase().trim()
-  let best: { locator: string; score: number } | null = null
-
-  const consider = (locator: string | null | undefined, score: number) => {
-    if (locator && score > (best?.score ?? 0)) best = { locator, score }
-  }
-
-  for (const pg of pages) {
-    for (const form of pg.forms) {
-      for (const field of form.fields) {
-        const name = (field.label || field.placeholder || field.htmlName || '').toLowerCase()
-        const score = scoreMatch(name, tl)
-        if (score > 0) {
-          // Priority: testId > id > name attr > label > placeholder > role
-          consider(
-            field.locators.byTestId || field.locators.byId || field.locators.byName
-            || field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole,
-            score
-          )
-        }
-      }
-      if (form.submitButtonLocator) {
-        const m = form.submitButtonLocator.match(/name:\s*['"](.+?)['"]/)
-        if (m) consider(form.submitButtonLocator, scoreMatch(m[1].toLowerCase(), tl))
-      }
-    }
-    for (const btn of pg.buttons) {
-      const name = (btn.name || btn.label || '').toLowerCase()
-      const score = scoreMatch(name, tl)
-      if (score > 0) {
-        consider(
-          btn.locators.byTestId || btn.locators.byId || btn.locators.getByRole
-          || btn.locators.getByText || btn.locators.getByLabel || btn.locators.byName,
-          score
-        )
-      }
-    }
-  }
-
-  return (best as { locator: string; score: number } | null)?.locator ?? null
-}
-
-// Returns only the byName (CSS input[name=...]) locator from KB — most reliable
-// on sites with broken ARIA (e.g. Shopify's <div id="X"> / <input id="X"> pattern)
-function findBestLocatorByName(target: string, pages: PageKnowledge[]): string | null {
-  const tl = target.toLowerCase().trim()
-  let best: { locator: string; score: number } | null = null
-  const consider = (locator: string | null | undefined, score: number) => {
-    if (locator && score > ((best as { locator: string; score: number } | null)?.score ?? 0))
-      best = { locator, score }
-  }
-  for (const pg of pages) {
-    for (const form of pg.forms) {
-      for (const field of form.fields) {
-        const name = (field.label || field.placeholder || field.htmlName || '').toLowerCase()
-        const score = scoreMatch(name, tl)
-        if (score > 0) consider(field.locators.byName, score)
-      }
-    }
-  }
-  return (best as { locator: string; score: number } | null)?.locator ?? null
-}
-
-// ─── Locator index — built once per execution, replaces per-step O(n) scans ──
-
-interface LocatorIndex {
-  primary: Map<string, string>  // target.toLowerCase() → best locator
-  byName: Map<string, string>   // target.toLowerCase() → byName locator
-}
-
-function buildLocatorIndex(pages: PageKnowledge[]): LocatorIndex {
-  const primary = new Map<string, string>()
-  const byName = new Map<string, string>()
-  for (const pg of pages) {
-    for (const form of pg.forms) {
-      for (const field of form.fields) {
-        const key = (field.label || field.placeholder || field.htmlName || '').toLowerCase().trim()
-        if (!key) continue
-        if (!primary.has(key)) {
-          const loc = field.locators.getByLabel || field.locators.getByPlaceholder || field.locators.getByRole || field.locators.byName
-          if (loc) primary.set(key, loc)
-        }
-        if (!byName.has(key) && field.locators.byName) byName.set(key, field.locators.byName)
-      }
-      if (form.submitButtonLocator) {
-        const m = form.submitButtonLocator.match(/name:\s*['"](.+?)['"]/)
-        if (m && !primary.has(m[1].toLowerCase())) primary.set(m[1].toLowerCase(), form.submitButtonLocator)
-      }
-    }
-    for (const btn of pg.buttons) {
-      const key = (btn.name || btn.label || '').toLowerCase().trim()
-      if (!key || primary.has(key)) continue
-      const loc = btn.locators.getByRole || btn.locators.getByText || btn.locators.getByLabel
-      if (loc) primary.set(key, loc)
-    }
-  }
-  return { primary, byName }
-}
-
-function indexedLocator(target: string, index: LocatorIndex): string | null {
-  const tl = target.toLowerCase().trim()
-  // Exact match first, then prefix/substring
-  if (index.primary.has(tl)) return index.primary.get(tl)!
-  for (const [key, loc] of index.primary) {
-    if (key.startsWith(tl) || tl.startsWith(key)) return loc
-  }
-  return null
-}
-
-function indexedLocatorByName(target: string, index: LocatorIndex): string | null {
-  const tl = target.toLowerCase().trim()
-  if (index.byName.has(tl)) return index.byName.get(tl)!
-  for (const [key, loc] of index.byName) {
-    if (key.startsWith(tl) || tl.startsWith(key)) return loc
-  }
-  return null
-}
 
 // ─── Page stability ───────────────────────────────────────────────────────────
 
@@ -461,11 +346,115 @@ async function getAriaSnapshot(page: Page): Promise<string> {
   }
 }
 
+// ─── Element map ─────────────────────────────────────────────────────────────
+// Pre-computes best Playwright locator for every interactive element on the page.
+// Used by TC generation to embed locators at write-time, not resolve-time.
+
+export interface ElementDef {
+  type: 'input' | 'button' | 'link' | 'select'
+  label: string
+  locator: string   // valid Playwright locator string
+  path?: string     // for links: href path
+}
+
+export async function extractElementMap(page: Page): Promise<ElementDef[]> {
+  try {
+    const raw = await page.evaluate((): Array<{
+      type: string; label: string; name: string; id: string;
+      inputType: string; placeholder: string; href: string;
+      dataTestId: string; ariaLabel: string; text: string
+    }> => {
+      const results: Array<{
+        type: string; label: string; name: string; id: string;
+        inputType: string; placeholder: string; href: string;
+        dataTestId: string; ariaLabel: string; text: string
+      }> = []
+      const trim = (s: string | null | undefined) => s?.trim().replace(/\s+/g, ' ') || ''
+
+      // Inputs / textareas / selects
+      document.querySelectorAll<HTMLInputElement>(
+        'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select'
+      ).forEach(el => {
+        const labelEl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null
+        results.push({
+          type: el.tagName === 'SELECT' ? 'select' : 'input',
+          label: trim(labelEl?.textContent) || trim(el.getAttribute('aria-label')) || '',
+          name: el.name || '', id: el.id || '',
+          inputType: (el as HTMLInputElement).type || 'text',
+          placeholder: trim((el as HTMLInputElement).placeholder),
+          href: '', dataTestId: el.getAttribute('data-testid') || el.getAttribute('data-cy') || '',
+          ariaLabel: trim(el.getAttribute('aria-label')), text: '',
+        })
+      })
+
+      // Buttons
+      document.querySelectorAll<HTMLElement>(
+        'button, [role="button"], input[type="submit"], input[type="button"]'
+      ).forEach(el => {
+        const text = trim((el as HTMLInputElement).value || el.innerText || el.getAttribute('aria-label'))
+        if (!text || text.length > 100) return
+        results.push({
+          type: 'button', label: text, name: '', id: el.id || '',
+          inputType: '', placeholder: '', href: '',
+          dataTestId: el.getAttribute('data-testid') || el.getAttribute('data-cy') || '',
+          ariaLabel: trim(el.getAttribute('aria-label')), text,
+        })
+      })
+
+      // Links
+      document.querySelectorAll<HTMLAnchorElement>('a[href], a[onclick]').forEach(el => {
+        const text = trim(el.innerText || el.getAttribute('aria-label'))
+        if (!text || text.length > 80) return
+        const href = el.getAttribute('href') || ''
+        if (/^#|javascript:/i.test(href) && !text) return
+        results.push({
+          type: 'link', label: text, name: '', id: el.id || '',
+          inputType: '', placeholder: '', href,
+          dataTestId: el.getAttribute('data-testid') || '',
+          ariaLabel: trim(el.getAttribute('aria-label')), text,
+        })
+      })
+
+      return results
+    })
+
+    return raw
+      .filter(el => el.label)
+      .map(el => {
+        let locator: string
+        if (el.type === 'input' || el.type === 'select') {
+          if (el.dataTestId)       locator = `[data-testid="${el.dataTestId}"]`
+          else if (el.inputType === 'password') locator = 'input[type="password"]'
+          else if (el.name)        locator = `${el.type === 'select' ? 'select' : 'input'}[name="${el.name}"]`
+          else if (el.id)          locator = `#${el.id}`
+          else                     locator = el.label ? `getByLabel:${el.label}` : `getByPlaceholder:${el.placeholder}`
+        } else if (el.type === 'button') {
+          if (el.dataTestId)       locator = `[data-testid="${el.dataTestId}"]`
+          else if (el.id)          locator = `#${el.id}`
+          else                     locator = `getByRole:button:${el.label}`
+        } else {
+          if (el.dataTestId)       locator = `[data-testid="${el.dataTestId}"]`
+          else if (el.href && !/^javascript:/i.test(el.href)) locator = `getByRole:link:${el.label}`
+          else                     locator = `getByText:${el.label}`
+        }
+        return {
+          type: el.type as ElementDef['type'],
+          label: el.label,
+          locator,
+          path: el.href || undefined,
+        }
+      })
+      .slice(0, 200)
+  } catch {
+    return []
+  }
+}
+
 // ─── DOM field extraction ─────────────────────────────────────────────────────
 // Extracts raw input metadata directly from DOM — bypasses ARIA bugs like
 // Shopify's pattern where <div id="X"> shadows <input id="X">.
 
-async function extractDomFields(page: Page): Promise<{ fields: string; interactive: string }> {
+export async function extractDomFields(page: Page): Promise<{ fields: string; interactive: string }> {
   try {
     const result = await page.evaluate(() => {
       // Form fields
@@ -680,7 +669,6 @@ async function resolveStepWithLLM(
   page: Page,
   step: string,
   expected: string,
-  pages: PageKnowledge[],
   appConfig: AppConfig,
   onEvent?: (e: AgentEvent) => void,
 ): Promise<ParsedStep> {
@@ -694,15 +682,13 @@ async function resolveStepWithLLM(
   onEvent?.({ type: 'dom_inspect', url: page.url(), fieldCount, text: `${fieldCount} field(s) found on ${page.url()}` })
   onEvent?.({ type: 'agent_thinking', text: `Resolving locator for: ${cleanStep}` })
 
-  const kbHints = formatPagesForParsing(pages)
-
   const instructions = mergeInstructions(appConfig)
   const prompt = fillPrompt('step-resolver', {
     current_url: page.url(),
     aria_snapshot: ariaSnap,
     dom_fields: domFieldsRaw,
     dom_interactive: domInteractive,
-    knowledge_base: kbHints,
+    knowledge_base: '(no KB — live DOM is the source of truth)',
     app_credentials: formatCredentialsForLLM(appConfig),
     step: cleanStep,
     expected: expected || '(not specified)',
@@ -746,6 +732,31 @@ async function resolveStepWithLLM(
       const valueMatch = cleanStep.match(/with\s+['"]([^'"]+)['"]/i)
       onEvent?.({ type: 'llm_response', action: 'fill', locator, rationale: `password type → ${locator}` })
       return { action: 'fill', target: 'password', value: valueMatch?.[1] ?? '', locator }
+    }
+  }
+
+  // ── Click fast path: scan domInteractive for the target text ─────────────────
+  const isClickStep = /^(?:click|press|tap|submit)/i.test(cleanStep) || /\bclick\b/i.test(cleanStep)
+  if (isClickStep) {
+    const clickTarget = cleanStep.match(/['"]([^'"]+)['"]/i)?.[1] ?? targetLabel
+    const interactiveLines = domInteractive.split('\n').filter(l => l.trim())
+    const matched = interactiveLines.find(l => {
+      const lineText = l.toLowerCase()
+      return clickTarget.toLowerCase().split(/\s+/).every(w => lineText.includes(w))
+    })
+    if (matched) {
+      const testIdMatch = matched.match(/data-testid="([^"]+)"/)
+      const idMatch = matched.match(/\bid="([^"]+)"/)
+      const textMatch = matched.match(/text="([^"]+)"/)
+      const isLink = matched.includes('[link]')
+      let locator: string
+      if (testIdMatch) locator = `page.locator('[data-testid="${testIdMatch[1]}"]')`
+      else if (idMatch) locator = `page.locator('#${idMatch[1]}')`
+      else if (textMatch && isLink) locator = `page.getByRole('link', { name: '${textMatch[1]}' })`
+      else if (textMatch) locator = `page.getByRole('button', { name: '${textMatch[1]}' })`
+      else locator = `page.getByText('${clickTarget}')`
+      onEvent?.({ type: 'llm_response', action: 'click', locator, rationale: `DOM interactive match: "${clickTarget}" → ${locator}` })
+      return { action: 'click', target: clickTarget, locator }
     }
   }
 
@@ -826,7 +837,6 @@ async function healStep(
   step: string,
   parsedStep: ParsedStep,
   error: Error,
-  pages: PageKnowledge[],
   appConfig: AppConfig,
   onEvent: (e: AgentEvent) => void,
   tcId: string,
@@ -863,7 +873,7 @@ async function healStep(
       current_url: page.url(),
       aria_snapshot: ariaStr,
       element_context: elementContext || '(not extracted)',
-      known_locators: formatLocatorsForCurrentPage(pages, page.url()),
+      known_locators: '(live DOM is primary — no KB locators)',
       previously_tried: triedStr,
       custom_instructions: instructions,
     })
@@ -959,7 +969,6 @@ async function analyzeStuckScenario(
   stepIndex: number,
   completedSteps: { step: string; status: string }[],
   remainingSteps: string[],
-  pages: PageKnowledge[],
   onEvent: (e: AgentEvent) => void,
 ): Promise<{ action: 'revise' | 'skip' | 'navigate'; revisedSteps?: ParsedStep[]; navTarget?: string; reason: string }> {
   onEvent({ type: 'tc_analyzing', tcId: tc.id, reason: 'Exhausted all healing attempts — running scenario analysis…' })
@@ -991,7 +1000,7 @@ async function analyzeStuckScenario(
     remaining_steps: remainingStr,
     current_url: page.url(),
     aria_snapshot: ariaStr,
-    page_knowledge: formatKnowledgeForAnalyst(pages),
+    page_knowledge: '(live DOM only — no KB)',
   })
 
   try {
@@ -1015,7 +1024,7 @@ async function analyzeStuckScenario(
 
 // ─── Action executor ──────────────────────────────────────────────────────────
 
-async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledge[], baseUrl: string, locIndex?: LocatorIndex, onEvent?: (e: AgentEvent) => void): Promise<void> {
+async function executeAction(page: Page, parsed: ParsedStep, baseUrl: string, onEvent?: (e: AgentEvent) => void): Promise<void> {
   const { action, target, value } = parsed
   const resolvedLocator = parsed.locator && parsed.locator.length > 0 ? parsed.locator : null
 
@@ -1031,7 +1040,7 @@ async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledg
     case 'navigate': {
       const path = target.startsWith('http') ? target : `${baseUrl}${target.startsWith('/') ? '' : '/'}${target}`
       onEvent?.({ type: 'nav', url: path, text: `Navigating to ${path}` })
-      await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 20000 })
+      await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 45000 })
       await waitForStable(page)
       // Dismiss overlays that appear immediately after page load (cookie banners, popups)
       await dismissOverlays(page, onEvent)
@@ -1051,21 +1060,6 @@ async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledg
         emitTry(resolvedLocator, 1, ok)
         if (ok) break
       }
-      // 2. KB byName CSS selector — input[name="..."] is immune to ARIA bugs (reliable fallback)
-      const kbByName = locIndex ? indexedLocatorByName(target, locIndex) : findBestLocatorByName(target, pages)
-      if (kbByName) {
-        const ok = await tryFill(resolveLocatorString(page, kbByName), fillVal)
-        emitTry(kbByName, 2, ok)
-        if (ok) break
-      }
-      // 3. KB primary locator (getByLabel/getByRole) — for sites with clean ARIA
-      const kbLocatorFill = locIndex ? indexedLocator(target, locIndex) : findBestLocator(target, pages)
-      if (kbLocatorFill) {
-        const ok = await tryFill(resolveLocatorString(page, kbLocatorFill), fillVal)
-        emitTry(kbLocatorFill, 3, ok)
-        if (ok) break
-      }
-
       throw new Error(`Could not fill "${target}". LLM locator: ${resolvedLocator || '(none)'}. URL: ${page.url()}`)
     }
 
@@ -1080,10 +1074,7 @@ async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledg
 
       // 1. LLM-resolved locator — grounded in live ARIA (primary)
       if (resolvedLocator && await tryWithEmit(resolvedLocator, 1, resolveLocatorString(page, resolvedLocator))) break
-      // 2. KB locator
-      const kbLocatorClick = locIndex ? indexedLocator(target, locIndex) : findBestLocator(target, pages)
-      if (kbLocatorClick && await tryWithEmit(kbLocatorClick, 2, resolveLocatorString(page, kbLocatorClick))) break
-      // 3. button
+      // 2. button
       if (await tryWithEmit(`getByRole('button','${target}')`, 3, page.getByRole('button', { name: target, exact: false }))) break
       // 4. link
       if (await tryWithEmit(`getByRole('link','${target}')`, 4, page.getByRole('link', { name: target, exact: false }))) break
@@ -1103,7 +1094,7 @@ async function executeAction(page: Page, parsed: ParsedStep, pages: PageKnowledg
       )
       if (iframeClicked) { emitTry(`iframe:getByRole('button','${target}')`, 9, true); break }
 
-      throw new Error(`Could not click "${target}" — tried 9 strategies. URL: ${page.url()}`)
+      throw new Error(`Could not click "${target}" — tried all strategies. URL: ${page.url()}`)
     }
 
     case 'assert': {
@@ -1178,7 +1169,7 @@ export async function replaySavedScript(
       const { original, parsed } = savedSteps[i]
       onEvent({ type: 'step_start', tcId, stepIndex: i, step: original })
       try {
-        await executeAction(page, parsed, [], baseUrl, undefined, onEvent)
+        await executeAction(page, parsed, baseUrl, onEvent)
         onEvent({ type: 'step_done', tcId, stepIndex: i, status: 'passed', locatorUsed: parsed.locator, healingAttempts: 0 })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -1213,7 +1204,6 @@ export async function replaySavedScript(
 export async function playwrightMcpAgent(
   testCases: TestCase[],
   appConfig: AppConfig,
-  pages: PageKnowledge[],
   onEvent: (e: AgentEvent) => void,
   options: { browser?: string; instructions?: string; headed?: boolean } = {},
 ): Promise<ExecutionResult> {
@@ -1257,8 +1247,6 @@ export async function playwrightMcpAgent(
       const completedSteps: { step: string; status: string }[] = []
       // Cache resolved steps so analyst revisions can override them
       const parsedStepsCache: (ParsedStep | null)[] = new Array(tc.steps.length).fill(null)
-      // Build locator index once per TC — avoids O(pages×forms×fields) per-step scans
-      const locatorIndex = buildLocatorIndex(pages)
 
       try {
         for (let i = 0; i < tc.steps.length; i++) {
@@ -1273,44 +1261,57 @@ export async function playwrightMcpAgent(
           //   page-grounded locator (reads live ARIA + raw DOM fields so it picks the
           //   right selector even on sites with broken ARIA like Shopify)
           let parsed: ParsedStep
-          if (parsedStepsCache[i]) {
+
+          // Use pre-verified structured step if available
+          const ss = tc.structuredSteps?.[i]
+          if (ss?.locator && ss.verified) {
+            const rawLoc = ss.locator.replace(/^page\.locator\((['"])(.*)\1\)$/, '$2')
+              .replace(/^page\./, '')
+            parsed = { action: ss.action as ParsedStep['action'], target: ss.target, value: ss.value, locator: ss.locator }
+            parsedStepsCache[i] = parsed
+            onEvent({ type: 'agent_thinking', text: `Pre-verified locator: ${ss.locator}` })
+          } else if (parsedStepsCache[i]) {
             parsed = parsedStepsCache[i]!
           } else {
             const regexParsed = parseStepRegex(step)
-            if (regexParsed && regexParsed.action !== 'fill') {
-              // navigate / assert / wait / click: regex + executor's built-in strategies
-              // LLM is NOT called — it reliably returns wrong locators for non-fill steps
-              parsed = regexParsed
-              onEvent({ type: 'agent_thinking', text: `${regexParsed.action} step — using direct strategy (no LLM needed)` })
+            // Use LLM for: fill steps, unknown steps, click steps with [inferred] tag
+            const needsLLM = !regexParsed
+              || regexParsed.action === 'fill'
+              || (regexParsed.action === 'click' && /\[inferred\]/i.test(step))
+
+            if (!needsLLM) {
+              // navigate / assert / wait / plain click: regex + executor's built-in strategies
+              parsed = regexParsed!
+              onEvent({ type: 'agent_thinking', text: `${regexParsed!.action} step — using direct strategy` })
             } else if (regexParsed?.action === 'fill' || (!regexParsed && /fill|enter|type|input/i.test(step))) {
-              // fill: call LLM to get a page-grounded locator from live ARIA + DOM fields
-              const llmParsed = await resolveStepWithLLM(page, step, expected, pages, appConfig, onEvent)
+              // fill: LLM for page-grounded locator
+              const llmParsed = await resolveStepWithLLM(page, step, expected, appConfig, onEvent)
               parsed = regexParsed ? { ...regexParsed, locator: llmParsed.locator || regexParsed.locator } : llmParsed
             } else {
-              // Unknown step shape — try LLM to interpret it
-              const llmParsed = await resolveStepWithLLM(page, step, expected, pages, appConfig, onEvent)
-              parsed = llmParsed
+              // click [inferred] or unknown: LLM resolves against live DOM
+              const llmParsed = await resolveStepWithLLM(page, step, expected, appConfig, onEvent)
+              parsed = regexParsed ? { ...regexParsed, locator: llmParsed.locator || regexParsed.locator } : llmParsed
             }
             parsedStepsCache[i] = parsed
           }
 
           let stepError: Error | null = null
           let healingAttempts = 0
-          let usedLocator = parsed.locator || indexedLocator(parsed.target, locatorIndex) || undefined
+          let usedLocator = parsed.locator || undefined
           // Track ALL tried/discarded locators so healer doesn't repeat them
           const triedLocators: string[] = usedLocator ? [usedLocator] : []
 
           // Up to 3 attempts: primary + 2 LLM heals
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              await executeAction(page, parsed, pages, baseUrl, locatorIndex, onEvent)
+              await executeAction(page, parsed, baseUrl, onEvent)
               stepError = null
               break
             } catch (err) {
               stepError = err instanceof Error ? err : new Error(String(err))
               if (attempt < 2) {
                 const healed = await healStep(
-                  page, step, parsed, stepError, pages, appConfig, onEvent,
+                  page, step, parsed, stepError, appConfig, onEvent,
                   tc.id, i, attempt + 1, triedLocators,
                 )
                 if (healed) {
@@ -1335,13 +1336,13 @@ export async function playwrightMcpAgent(
 
           if (stepError) {
             // Scenario analyst as last resort
-            const recovery = await analyzeStuckScenario(page, tc, i, completedSteps, tc.steps.slice(i + 1), pages, onEvent)
+            const recovery = await analyzeStuckScenario(page, tc, i, completedSteps, tc.steps.slice(i + 1), onEvent)
 
             if (recovery.action === 'navigate' && recovery.navTarget) {
               try {
-                await page.goto(`${baseUrl}${recovery.navTarget}`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+                await page.goto(`${baseUrl}${recovery.navTarget}`, { waitUntil: 'domcontentloaded', timeout: 45000 })
                 await waitForStable(page)
-                await executeAction(page, parsed, pages, baseUrl, locatorIndex, onEvent)
+                await executeAction(page, parsed, baseUrl, onEvent)
                 stepError = null
                 onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: usedLocator, healingAttempts })
                 completedSteps.push({ step, status: 'passed' })
@@ -1354,7 +1355,7 @@ export async function playwrightMcpAgent(
               const revised = recovery.revisedSteps[0]
               parsedStepsCache[i] = revised
               try {
-                await executeAction(page, revised, pages, baseUrl, locatorIndex, onEvent)
+                await executeAction(page, revised, baseUrl, onEvent)
                 stepError = null
                 onEvent({ type: 'step_done', tcId: tc.id, stepIndex: i, status: 'passed', locatorUsed: revised.locator || undefined, healingAttempts })
                 completedSteps.push({ step, status: 'passed' })

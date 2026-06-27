@@ -26,6 +26,14 @@ Use EXACTLY these values for any login or authentication steps:
 
 {{app_credentials}}
 
+## Element Map — Pre-Resolved Playwright Locators
+CRITICAL: These are exact Playwright locators computed from the live DOM. For any element listed here:
+1. Use its exact label in the step description
+2. Copy its locator string into the `locator` field verbatim
+3. Do NOT use `[inferred]` for elements that appear in this map
+
+{{element_map}}
+
 ## UI Knowledge — Real Pages Crawled from the Application
 These are actual pages, field names, button labels, and paths from the live app. Use them verbatim:
 
@@ -97,9 +105,24 @@ Return a JSON array. Each object must have:
 - `title`: exact title of what is being tested
 - `type`: "positive" | "negative" | "edge"
 - `priority`: "high" | "medium" | "low"
-- `steps`: array of grounded action steps using real field names, paths, and credentials
-- `stepExpected`: array of expected results — one per step, same length as steps
 - `expectedResult`: one-sentence overall result matching the scenario's Then clause
+- `structuredSteps`: array of step objects (see format below). The `steps` flat array is derived from this automatically.
+
+### structuredSteps format
+Each step object:
+```json
+{
+  "description": "Fill 'E-Mail Address' with 'user@example.com'",
+  "action": "fill",
+  "target": "E-Mail Address",
+  "value": "user@example.com",
+  "locator": "page.locator('input[name=\"email\"]')",
+  "expected": "Email field is populated with the user's email"
+}
+```
+- `action`: one of `navigate | fill | click | assert | wait`
+- `locator`: copy from Element Map above if element is listed there; otherwise set to `null`
+- For elements NOT in the Element Map, set `locator: null` and append `[inferred]` to description
 
 ## Step Writing Rules
 1. Navigate steps: use exact path from UI Knowledge (e.g. `/index.php?rt=account/login`)
