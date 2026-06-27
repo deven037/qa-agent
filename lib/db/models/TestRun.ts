@@ -14,6 +14,7 @@ export interface StepRecord {
   healingAttempts: number
   healingRationale?: string
   error?: string
+  screenshot?: string  // base64 PNG captured after step completion
 }
 
 export interface NavEvent {
@@ -53,6 +54,7 @@ const StepSchema = new Schema({
   healingAttempts:  { type: Number, default: 0 },
   healingRationale: { type: String },
   error:            { type: String },
+  screenshot:       { type: String },
 }, { _id: false })
 
 const NavEventSchema = new Schema({

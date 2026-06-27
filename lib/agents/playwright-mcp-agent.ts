@@ -11,6 +11,7 @@ export interface AgentEvent {
     | 'tc_start' | 'step_start' | 'step_heal' | 'step_done' | 'tc_done' | 'tc_analyzing' | 'log'
     | 'plan_start' | 'plan_step' | 'plan_done'
     | 'agent_thinking' | 'llm_response' | 'dom_inspect' | 'locator_try' | 'nav'
+    | 'step_screenshot'
   id?: string
   title?: string
   tcId?: string
@@ -32,6 +33,7 @@ export interface AgentEvent {
   fieldCount?: number
   action?: string
   plannedStep?: { step: string; expected: string }
+  screenshot?: string  // base64 PNG for step_screenshot events
 }
 
 export interface ExecutionResult {

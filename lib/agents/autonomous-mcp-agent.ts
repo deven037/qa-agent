@@ -299,6 +299,15 @@ async function executeTool(
     const { stepIndex, status, message } = args as { stepIndex: number; status: 'passed' | 'failed'; message: string }
     if (!(stepIndex in state.confirmedSteps)) {
       onEvent({ type: 'step_start', tcId: tc.id, stepIndex, step: tc.steps[stepIndex] ?? `Step ${stepIndex + 1}` })
+      // Capture screenshot as proof before confirming the step
+      try {
+        const ssResult = await client.callTool({ name: 'browser_screenshot', arguments: {} })
+        const ssContent = ssResult.content as Array<{ type: string; data?: string; text?: string }>
+        const imgPart = ssContent.find(c => c.type === 'image' && c.data)
+        if (imgPart?.data) {
+          onEvent({ type: 'step_screenshot', tcId: tc.id, stepIndex, screenshot: imgPart.data })
+        }
+      } catch { /* screenshot failure is non-fatal */ }
       onEvent({ type: 'step_done', tcId: tc.id, stepIndex, status, error: status === 'failed' ? message : undefined })
       state.confirmedSteps[stepIndex] = status
     }

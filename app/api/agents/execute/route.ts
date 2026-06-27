@@ -100,6 +100,11 @@ export async function POST(req: NextRequest) {
               if (event.rationale) currentStep.healingRationale = event.rationale
             }
             break
+          case 'step_screenshot':
+            if (currentStep && event.screenshot) {
+              currentStep.screenshot = event.screenshot
+            }
+            break
           case 'step_done':
             if (currentStep) {
               currentStep.status = event.status ?? 'failed'

@@ -103,6 +103,18 @@ function StepCard({ step, index }: { step: StepRecord; index: number }) {
             </div>
           )}
 
+          {/* Screenshot */}
+          {step.screenshot && (
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Screenshot</p>
+              <img
+                src={`data:image/png;base64,${step.screenshot}`}
+                alt={`Step ${index + 1} screenshot`}
+                className="rounded-lg border border-slate-200 w-full object-contain max-h-80"
+              />
+            </div>
+          )}
+
           {/* Error */}
           {step.error && (
             <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3">
