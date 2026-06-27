@@ -10,6 +10,7 @@
  * Gemini 2.5 Flash (via Google's OpenAI-compat endpoint) → Groq → Together → OpenRouter → Cerebras
  */
 
+import path from 'path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import OpenAI from 'openai'
@@ -233,10 +234,13 @@ async function spawnMcpClient(browserType: string): Promise<Client> {
     ? webkit.executablePath()
     : chromium.executablePath()
 
+  // Use locally installed @playwright/mcp binary — avoids npx download at runtime in Docker
+  const mcpCli = path.join(process.cwd(), 'node_modules', '@playwright', 'mcp', 'cli.js')
+
   const transport = new StdioClientTransport({
-    command: 'npx',
+    command: 'node',
     args: [
-      '@playwright/mcp@latest',
+      mcpCli,
       '--headless',
       '--viewport-size=1280,800',
       '--no-sandbox',
