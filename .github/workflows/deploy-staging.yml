@@ -67,6 +67,7 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -e
 
@@ -94,6 +95,7 @@ jobs:
               'CEREBRAS_API_KEY_1=${{ secrets.CEREBRAS_API_KEY_1 }}' \
               'OPENROUTER_API_KEY_1=${{ secrets.OPENROUTER_API_KEY_1 }}' \
               'TOGETHER_API_KEY_1=${{ secrets.TOGETHER_API_KEY_1 }}' \
+              'SAMBANOVA_API_KEY_1=${{ secrets.SAMBANOVA_API_KEY_1 }}' \
               > /home/${{ secrets.VM_USER }}/.env.staging
 
             # Stop old staging container
